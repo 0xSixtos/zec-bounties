@@ -477,12 +477,35 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       let buffer = "";
 
-      // Ensure each recipient has amount + memo
-      const sanitizedRecipients = recipients.map((r) => ({
-        address: r.address,
-        amount: Math.ceil(Number(r.amount)),
-        memo: r.memo || "Sent from the ZEC bounty app!",
-      }));
+      // The recipient list is interpolated into a single-quoted zingo-cli REPL
+      // line (`quicksend '<json>'`) written to stdin. JSON.stringify escapes
+      // double quotes, backslashes and control characters, but NOT the single
+      // quote `'`, which is the delimiter wrapping the argument — so a single
+      // quote in any field could break out of the quoting and corrupt or inject
+      // into the signing-wallet command. Guard both fields here, at the sink:
+      //  - Addresses are base58/bech32 and never contain anything but
+      //    [A-Za-z0-9]; reject anything else outright (mirrors parseAddress's
+      //    control-character guard above).
+      //  - Memos are free text (they carry the bounty title, which may
+      //    legitimately contain an apostrophe), so strip the quote/newline
+      //    characters rather than reject, keeping the send working.
+      const sanitizedRecipients = [];
+      for (const r of recipients) {
+        const address = String(r.address ?? "");
+        if (!/^[A-Za-z0-9]+$/.test(address)) {
+          reject(new Error(`Invalid recipient address: ${address}`));
+          return;
+        }
+        const memo = String(r.memo || "Sent from the ZEC bounty app!").replace(
+          /['\r\n]/g,
+          " ",
+        );
+        sanitizedRecipients.push({
+          address,
+          amount: Math.ceil(Number(r.amount)),
+          memo,
+        });
+      }
 
       const jsonString = JSON.stringify(sanitizedRecipients);
       const command = `quicksend '${jsonString}'`;
