@@ -21,6 +21,7 @@ const NAV = [
   { href: "/docs/api", label: "API" },
   { href: "/docs/badges", label: "Badges" },
   { href: "/docs/faq", label: "FAQ" },
+  { href: "/docs/glossary", label: "Glossary" },
 ];
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
