@@ -39,8 +39,7 @@ const { validateBountyCreate, validateCategory } = require("../helpers/validateB
 const {
   USER_SELECT,
   USER_SELECT_PUBLIC,
-  USER_SELECT_FULL,
-  USER_SELECT_WITH_ROLE,
+  bountyUserSelects,
 } = require("../utils/userSelects");
 const { notifyNewBounty } = require("../utils/discord/discordNotify");
 const {
@@ -714,10 +713,10 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
     if (cached) return res.json(cached);
 
     const userSelect = isAuthed ? USER_SELECT : USER_SELECT_PUBLIC;
-    const createdByUserSelect = isAuthed
-      ? USER_SELECT_WITH_ROLE
-      : USER_SELECT_PUBLIC;
-    const assigneeUserSelect = isAuthed ? USER_SELECT_FULL : USER_SELECT_PUBLIC;
+    const {
+      user: assigneeUserSelect,
+      createdByUser: createdByUserSelect,
+    } = bountyUserSelects({ isAuthed, isAdmin });
 
     const [bounties, total] = await Promise.all([
       prisma.bounty.findMany({
