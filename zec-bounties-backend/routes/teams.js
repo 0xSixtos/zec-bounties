@@ -626,7 +626,8 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
   try {
     const { teamId } = req.params;
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    // Clamp to 1..50 (see GET /api/bounties).
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
 
     const team = await prisma.team.findUnique({
       where: { id: teamId },
