@@ -30,6 +30,8 @@ function loadSubmissionRoute(prisma) {
   const websocket = {
     sendRealtimeUpdate: (...args) => effects.broadcasts.push(args),
     sendToUser: (...args) => effects.broadcasts.push(args),
+    handleWebSocket() {},
+    getClientByUserId() { return null; },
   };
   const activity = load("utils/bountyActivity.js", {
     "../prisma/client": prisma,
@@ -59,7 +61,7 @@ function loadSubmissionRoute(prisma) {
     "../prisma/client": prisma,
     "../helpers/email": {},
     "../middleware/auth": { authenticate: noOp, isAdmin: noOp, optionalAuthenticate: noOp },
-    "../middleware/websocket": { sendRealtimeUpdate: (...args) => effects.broadcasts.push(args) },
+    "../middleware/websocket": websocket,
     "../utils/cache": cache,
     "../utils/sendMail": noOp,
     "../utils/notifyUser": noOp,

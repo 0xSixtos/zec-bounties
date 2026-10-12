@@ -252,14 +252,6 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
       return res.status(400).json({ error: categoryValidation.error });
     }
 
-    // Only admins may create a pre-approved bounty. Non-admin callers'
-    // isApproved value is ignored outright, mirroring the guard on PUT /:id.
-    const resolvedIsApproved =
-      req.user.role === "ADMIN"
-        ? isApproved !== undefined
-          ? !!isApproved
-          : true
-        : false;
     const resolvedTargetRepo = resolveTargetRepo(targetRepo);
     if (resolvedTargetRepo === undefined) {
       return res.status(400).json({ error: "Invalid targetRepo" });
@@ -269,38 +261,27 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
       return res.status(400).json({ error: "Invalid chain value" });
     }
 
-    // If a teamId was given, confirm it exists and the creator is actually
-    // a member (global admins can post on behalf of any team). `team` is
-    // declared here (not with `const` inside the `if`) so it's still in
-    // scope below when we denormalize its privacy flag onto the bounty.
     let team = null;
     if (teamId) {
       team = await prisma.team.findUnique({ where: { id: teamId } });
       if (!team) return res.status(404).json({ error: "Team not found" });
-
-      // Verification gate applies to everyone, including global admins —
-      // this isn't an authorization check, it's a platform integrity gate.
       if (!team.isVerified) {
         return res.status(403).json({
           error: `${team.name} must be verified by ${REQUIRED_TEAM_VERIFICATIONS} admins before it can post bounties`,
         });
       }
-
       if (req.user.role !== "ADMIN") {
         const membership = await prisma.teamMember.findUnique({
           where: { teamId_userId: { teamId, userId: req.user.id } },
         });
         if (!membership) {
-          return res
-            .status(403)
-            .json({ error: "You are not a member of this team" });
+          return res.status(403).json({ error: "You are not a member of this team" });
         }
       }
     }
 
     const isHunter = req.user.role === "HUNTER";
     const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
-
     const resolvedAssignee = isHunter
       ? req.user.id
       : canAssignOthers && assignee !== "none"
@@ -315,46 +296,25 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         timeToComplete: new Date(timeToComplete),
         createdBy: req.user.id,
         assignee: resolvedAssignee,
-        isApproved: resolvedIsApproved,
-        categoryId: categoryId || null,
-
-        // Approval is an authorization decision, so it is derived here rather
-        // than read from the request body: admins and verified teams post
-        // pre-approved, everyone else waits for review.
         isApproved: req.user.role === "ADMIN" || team !== null,
-        categoryId,
+        categoryId: categoryId || null,
         ...(chain && { chain }),
         ...(teamId && { teamId }),
         ...(resolvedTargetRepo && { targetRepo: resolvedTargetRepo }),
-        // Team bounties track their team's privacy. A teamless bounty that
-        // self-assigns is personal task tracking, so it stays off the public
-        // board until an admin approves it (see /:id/approve below).
         isPrivate: team ? team.isPrivate : resolvedAssignee === req.user.id,
-
         ...(resolvedAssignee && {
-          assignees: {
-            create: {
-              userId: resolvedAssignee,
-            },
-          },
+          assignees: { create: { userId: resolvedAssignee } },
         }),
       },
       include: {
-        createdByUser: {
-          select: USER_SELECT_WITH_ROLE,
-        },
-        assignees: {
-          include: { user: { select: USER_SELECT } },
-        },
-        assigneeUser: {
-          select: USER_SELECT_FULL,
-        },
+        createdByUser: { select: USER_SELECT_WITH_ROLE },
+        assignees: { include: { user: { select: USER_SELECT } } },
+        assigneeUser: { select: USER_SELECT_FULL },
         team: { select: { id: true, name: true, logo: true } },
       },
     });
 
     const recipients = await getBroadcastRecipients(bounty);
-
     logActivity(null, {
       bountyId: bounty.id,
       actorId: req.user.id,
@@ -362,20 +322,13 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
     }).catch(console.error);
     sendRealtimeUpdate("new_bounties", bounty, req.user.id, recipients);
     await bumpVersion("bounties");
-
     if (!bounty.isPrivate) notifyNewBounty(bounty);
-
-    // Respond immediately — don't block on notifications
     res.status(201).json(bounty);
 
-    // Fire-and-forget notifications
     (async () => {
       try {
         const creatorDisplayName =
           bounty.createdByUser.nickname || bounty.createdByUser.name;
-
-        // Load once, filter twice — email and push use the same base list
-        // so a user's push/email prefs are always evaluated consistently.
         const cachedUsers = await getCache("users:all");
         const users =
           cachedUsers ??
@@ -387,18 +340,14 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
               pushNotifications: true,
             },
           }));
-
         const otherUsers = users.filter((u) => u.id !== req.user.id);
-
         const emailRecipients = otherUsers
           .filter((u) => u.emailNotifications !== false)
           .map((u) => u.email)
           .filter(Boolean);
-
         const pushCandidateIds = otherUsers
           .filter((u) => u.pushNotifications)
           .map((u) => u.id);
-
         await Promise.all([
           sendPushToOptedIn(pushCandidateIds, {
             title: "New Bounty Available",

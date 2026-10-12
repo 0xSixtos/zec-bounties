@@ -2,8 +2,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-// Keep the production handlers, validators and authorization helpers. Replace application
-// startup, auth and outbound services so tests cannot send notifications.
 function loadModule(relativePath, dependencies, DateClass = Date) {
   const filename = path.join(__dirname, "../..", relativePath);
   const module = { exports: {} };
@@ -28,6 +26,12 @@ function loadHelpers(prisma, DateClass) {
     "./cache": { delCache: async () => {}, bumpVersion: async () => {} },
     "./sendMail": async () => {},
     "./notifyUser": async () => {},
+    "../middleware/websocket": {
+      sendRealtimeUpdate() {},
+      sendToUser() {},
+      handleWebSocket() {},
+      getClientByUserId() { return null; },
+    },
   }, DateClass);
 }
 
@@ -35,6 +39,7 @@ function loadRoutes(prisma) {
   const effects = { broadcasts: [], invalidations: 0, discord: [] };
   const noOp = async () => {};
   const helpers = loadHelpers(prisma);
+  helpers.broadcastBountyEvent = (...args) => effects.broadcasts.push(args);
   const cache = {
     getCache: async () => [],
     bumpVersion: async () => { effects.invalidations++; },
@@ -49,6 +54,10 @@ function loadRoutes(prisma) {
     "../utils/cache": cache,
     "../utils/sendMail": noOp,
     "../utils/notifyUser": noOp,
+    "../utils/bountyActivity": {
+      logActivity: async () => {},
+      publishActivity: async () => {},
+    },
     "../utils/discord/discordNotify": { notifyNewBounty: (bounty) => effects.discord.push(bounty.id) },
     "../utils/discord/discordAssignWebhook": { notifyAssignment: noOp },
     "../utils/constants": { REQUIRED_TEAM_VERIFICATIONS: 3 },
