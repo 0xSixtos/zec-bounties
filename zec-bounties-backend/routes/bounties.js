@@ -491,6 +491,14 @@ router.get("/", optionalAuthenticate, async (req, res) => {
       ...chainFilter,
       ...visibilityFilter,
       ...userFilter,
+      AND: [
+        {
+          OR: [
+            { suggestionReviewStatus: null },
+            { suggestionReviewStatus: { not: "PENDING" } },
+          ],
+        },
+      ],
     };
 
     // ------------------------------------------------------------
@@ -945,6 +953,11 @@ router.patch("/:id/suggestion-review", authenticate, async (req, res) => {
       },
     });
     if (!bounty) return res.status(404).json({ error: "Bounty not found" });
+    if (!bounty.teamId) {
+      return res
+        .status(400)
+        .json({ error: "Only team bounty suggestions can be reviewed" });
+    }
     if (!(await canAdministerBounty(bounty, req.user))) {
       return res.status(403).json({ error: "Team admin access required" });
     }
@@ -982,19 +995,26 @@ router.patch("/:id/suggestion-review", authenticate, async (req, res) => {
       Object.assign(data, changes);
     }
 
-    const updated = await prisma.bounty.update({
-      where: { id: bounty.id },
+    const updateResult = await prisma.bounty.updateMany({
+      where: { id: bounty.id, suggestionReviewStatus: "PENDING" },
       data,
+    });
+    if (updateResult.count === 0) {
+      return res.status(409).json({ error: "Suggestion is no longer pending" });
+    }
+
+    const updated = await prisma.bounty.findUnique({
+      where: { id: bounty.id },
       include: {
-        createdByUser: { select: USER_SELECT_WITH_ROLE },
+        createdByUser: { select: USER_SELECT },
         assignees: { include: { user: { select: USER_SELECT } } },
-        assigneeUser: { select: USER_SELECT_FULL },
+        assigneeUser: { select: USER_SELECT },
         team: { select: { id: true, name: true, logo: true } },
       },
     });
 
-    sendRealtimeUpdate("bounty_updated", updated, req.user.id);
     await invalidateBounty(bounty.id);
+    sendRealtimeUpdate("bounty_updated", updated, req.user.id);
     return res.json(updated);
   } catch (error) {
     console.error("Failed to review bounty suggestion:", error);
