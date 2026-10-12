@@ -53,6 +53,7 @@ function createHarness({ defaults }) {
     "../utils/zingo/zingoLibBalance.js": command("balance"),
     "../helpers/zcash/resolvePayingWallet": { resolvePayingWallet: unused },
     "../utils/cache": { delCache: unused, deleteCacheByPattern: unused },
+    "../utils/bountyHelpers": { invalidateBounty: async () => {} },
     "../utils/zingo/zingoLibInfo": unused,
     crypto: require("node:crypto"),
     "../middleware/websocket": { sendRealtimeUpdate() {}, sendToUser() {} },

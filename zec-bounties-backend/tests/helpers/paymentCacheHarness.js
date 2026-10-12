@@ -94,6 +94,7 @@ function createPaymentCacheHarness({ sendError = null } = {}) {
   const helpers = load("utils/bountyHelpers.js", {
     "../prisma/client": db, "./cache": cache,
     "./sendMail": forbidden, "./notifyUser": forbidden,
+    "../middleware/websocket": { sendRealtimeUpdate() {}, sendToUser() {} },
   });
   const dependencies = {
     "../prisma/client": db,
@@ -101,6 +102,7 @@ function createPaymentCacheHarness({ sendError = null } = {}) {
     "../middleware/websocket": { sendRealtimeUpdate() {}, sendToUser() {} },
     "../utils/cache": cache,
     "../utils/bountyHelpers": helpers,
+    "../utils/bountyActivity": { logActivity: async () => {}, publishActivity: async () => {} },
     "../utils/userSelects": require("../../utils/userSelects"),
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../helpers/email": {}, "../helpers/validateBounty": {},
