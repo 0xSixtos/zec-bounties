@@ -8,6 +8,7 @@ function createFakeProc() {
     stdout: new EventEmitter(),
     stderr: new EventEmitter(),
     stdin: { write() {}, on() {} },
+    on() {},
     kill() {},
   };
 }
@@ -21,7 +22,6 @@ test("wallet recovery output is never logged", async () => {
   const originalSpawn = childProcess.spawn;
   childProcess.spawn = () => createFakeProc();
 
-  // Bypass the existsSync check for the fake binary.
   const originalExists = fs.existsSync;
   fs.existsSync = () => true;
 
