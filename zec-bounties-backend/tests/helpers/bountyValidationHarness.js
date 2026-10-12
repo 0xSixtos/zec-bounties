@@ -2,8 +2,6 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-// Keep the production handlers, validators and authorization helpers. Replace application
-// startup, auth and outbound services so tests cannot send notifications.
 function loadModule(relativePath, dependencies, DateClass = Date) {
   const filename = path.join(__dirname, "../..", relativePath);
   const module = { exports: {} };
@@ -28,6 +26,12 @@ function loadHelpers(prisma, DateClass) {
     "./cache": { delCache: async () => {}, bumpVersion: async () => {} },
     "./sendMail": async () => {},
     "./notifyUser": async () => {},
+    "../middleware/websocket": {
+      sendRealtimeUpdate() {},
+      sendToUser() {},
+      handleWebSocket() {},
+      getClientByUserId() { return null; },
+    },
   }, DateClass);
 }
 
