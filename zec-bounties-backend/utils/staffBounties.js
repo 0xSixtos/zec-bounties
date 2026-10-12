@@ -57,22 +57,25 @@ function pageStaffRows(rows, offset, limit = STAFF_PAGE_LIMIT) {
   return { rows: slice, nextOffset: next, total: rows.length, limit: size };
 }
 
-async function resolveStaffUser(prisma, key) {
+// Resolves a profile key in a fixed order: id, then the unique nickname, then
+// a display name only when exactly one user has it. The public profile route
+// passes its own select.
+async function resolveStaffUser(prisma, key, select = STAFF_USER_SELECT) {
   const byId = await prisma.user.findUnique({
     where: { id: key },
-    select: STAFF_USER_SELECT,
+    select,
   });
   if (byId) return { user: byId };
 
   const byNickname = await prisma.user.findUnique({
     where: { nickname: key },
-    select: STAFF_USER_SELECT,
+    select,
   });
   if (byNickname) return { user: byNickname };
 
   const byName = await prisma.user.findMany({
     where: { name: key },
-    select: STAFF_USER_SELECT,
+    select,
     take: 2,
   });
   if (byName.length === 1) return { user: byName[0] };
