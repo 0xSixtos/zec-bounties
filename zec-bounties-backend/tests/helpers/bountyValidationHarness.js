@@ -53,6 +53,10 @@ function loadRoutes(prisma) {
     "../utils/cache": cache,
     "../utils/sendMail": noOp,
     "../utils/notifyUser": noOp,
+    "../utils/bountyActivity": {
+      recordActivity: async () => {},
+      createActivity: async () => {},
+    },
     "../utils/discord/discordNotify": { notifyNewBounty: (bounty) => effects.discord.push(bounty.id) },
     "../utils/discord/discordAssignWebhook": { notifyAssignment: noOp },
     "../utils/constants": { REQUIRED_TEAM_VERIFICATIONS: 3 },
