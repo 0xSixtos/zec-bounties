@@ -34,6 +34,7 @@ const executeZingoCliSync = require("../utils/zingo/zingoLibSync");
 const { randomUUID } = require("crypto");
 const { uploadToPinata, pinataUrl } = require("../utils/ipfs/pinata");
 const { REQUIRED_TEAM_VERIFICATIONS } = require("../utils/constants");
+const { validateBountyCreate, validateCategory } = require("../helpers/validateBounty");
 const {
   USER_SELECT,
   USER_SELECT_PUBLIC,
@@ -49,6 +50,8 @@ const {
   invalidateBounty,
   ONBOARDED_ROLES,
   requireOnboarded,
+  createBountyWithQuota,
+  WeeklyBountyQuotaError,
   getWeeklyBountyQuota,
   requireTaskCreation,
 } = require("../utils/bountyHelpers");
@@ -641,7 +644,8 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
   try {
     const { teamId } = req.params;
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    // Clamp to 1..50 (see GET /api/bounties).
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
 
     const team = await prisma.team.findUnique({
       where: { id: teamId },
@@ -750,6 +754,14 @@ router.post(
 
       const { teamId } = req.params;
 
+    if (req.user.role !== "ADMIN") {
+      const membership = await getTeamMember(teamId, req.user.id);
+      if (!membership) {
+        return res
+          .status(403)
+          .json({ error: "You are not a member of this team" });
+      }
+    }
       const team = await prisma.team.findUnique({ where: { id: teamId } });
       if (!team) return res.status(404).json({ error: "Team not found" });
 
@@ -759,77 +771,78 @@ router.post(
         });
       }
 
-      if (req.user.role !== "ADMIN") {
-        const membership = await getTeamMember(teamId, req.user.id);
-        if (!membership) {
-          return res
-            .status(403)
-            .json({ error: "You are not a member of this team" });
-        }
+        const {
+      title,
+      description,
+      bountyAmount,
+      timeToComplete,
+      assignee,
+      categoryId,
+      chain,
+      targetRepo,
+    } = req.body;
 
-        // Same weekly cap as the general marketplace create route.
-        const quota = await getWeeklyBountyQuota(req.user.id);
-        if (quota.remaining <= 0) {
-          return res.status(429).json({
-            error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
-            ...quota,
-          });
-        }
+    const validation = validateBountyCreate(req.body);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+    const categoryValidation = await validateCategory(prisma, categoryId);
+    if (!categoryValidation.valid) {
+      return res.status(400).json({ error: categoryValidation.error });
+    }
+    if (chain && !["MAIN", "TEST"].includes(chain)) {
+      return res.status(400).json({ error: "Invalid chain value" });
+    }
+
+    if (req.user.role !== "ADMIN") {
+      const membership = await getTeamMember(teamId, req.user.id);
+      if (!membership) {
+        return res
+          .status(403)
+          .json({ error: "You are not a member of this team" });
       }
+      const quota = await getWeeklyBountyQuota(req.user.id);
+      if (quota.remaining <= 0) {
+        return res.status(429).json({
+          error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
+          ...quota,
+        });
+      }
+    }
 
-      const {
+    const TARGET_REPOS = new Set([
+      "namada",
+      "zechub",
+      "zechub-wiki",
+      "zec-bounties",
+    ]);
+    if (
+      targetRepo != null &&
+      targetRepo !== "" &&
+      !TARGET_REPOS.has(targetRepo)
+    ) {
+      return res.status(400).json({ error: "Invalid targetRepo" });
+    }
+
+    const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
+    const resolvedAssignee =
+      canAssignOthers && assignee !== "none" ? assignee : null;
+    const bounty = await prisma.bounty.create({
+      data: {
         title,
         description,
-        bountyAmount,
-        timeToComplete,
-        assignee,
-        categoryId,
-        chain,
-        targetRepo,
-      } = req.body;
-
-      const TARGET_REPOS = new Set([
-        "namada",
-        "zechub",
-        "zechub-wiki",
-        "zec-bounties",
-      ]);
-      if (
-        targetRepo != null &&
-        targetRepo !== "" &&
-        !TARGET_REPOS.has(targetRepo)
-      ) {
-        return res.status(400).json({ error: "Invalid targetRepo" });
-      }
-
-      if (chain && !["MAIN", "TEST"].includes(chain)) {
-        return res.status(400).json({ error: "Invalid chain value" });
-      }
-
-      // Team bounties are always pre-approved — matches the frontend's
-      // existing isApproved: true whenever a teamId is set.
-      const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
-      const resolvedAssignee =
-        canAssignOthers && assignee !== "none" ? assignee : null;
-
-      const bounty = await prisma.bounty.create({
-        data: {
-          title,
-          description,
-          bountyAmount: parseFloat(bountyAmount),
-          timeToComplete: new Date(timeToComplete),
-          createdBy: req.user.id,
-          assignee: resolvedAssignee,
-          isApproved: true,
-          categoryId,
-          ...(chain && { chain }),
-          ...(targetRepo && { targetRepo }),
-          teamId,
-          isPrivate: team.isPrivate,
-          ...(resolvedAssignee && {
-            assignees: { create: { userId: resolvedAssignee } },
-          }),
-        },
+        bountyAmount: parseFloat(bountyAmount),
+        timeToComplete: new Date(timeToComplete),
+        createdBy: req.user.id,
+        assignee: resolvedAssignee,
+        isApproved: true,
+        categoryId: categoryId || null,
+        ...(chain && { chain }),
+        ...(targetRepo && { targetRepo }),
+        teamId,
+        isPrivate: team.isPrivate,
+        ...(resolvedAssignee && {
+          assignees: { create: { userId: resolvedAssignee } },
+        }),
+      },
         include: {
           createdByUser: {
             select: {
@@ -923,17 +936,19 @@ router.post(
                 }),
               ),
             ),
-          ]);
-        } catch (notificationErr) {
-          console.error("Team bounty notification failed:", notificationErr);
-        }
-      })();
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to create bounty" });
+        ]);
+      } catch (notificationErr) {
+        console.error("Team bounty notification failed:", notificationErr);
+      }
+    })();
+  } catch (err) {
+    if (err instanceof WeeklyBountyQuotaError) {
+      return res.status(429).json({ error: err.message, ...err.quota });
     }
-  },
-);
+    console.error(err);
+    res.status(500).json({ error: "Failed to create bounty" });
+  }
+});
 
 // ─── Favorites ───────────────────────────────────────────────────────────────
 
@@ -2710,7 +2725,30 @@ router.post(
       const { teamId, id } = req.params;
       if (!(await requireTeamAdmin(teamId, req, res))) return;
 
-      const { outcome, txid } = req.body; // "broadcast" or "failed"
+      const { outcome, txid, confirm } = req.body;
+
+      if (outcome !== "broadcast" && outcome !== "failed") {
+        return res
+          .status(400)
+          .json({ error: 'outcome must be "broadcast" or "failed"' });
+      }
+      if (
+        outcome === "broadcast" &&
+        (typeof txid !== "string" || !/^[0-9a-f]{64}$/i.test(txid.trim()))
+      ) {
+        return res.status(400).json({
+          error:
+            "A 64-character hex txid from the wallet history is required to resolve as broadcast",
+        });
+      }
+      // "failed" re-opens the bounty for payment; if the send did go out, the
+      // next payout pays it twice. Make the caller say they checked.
+      if (outcome === "failed" && confirm !== true) {
+        return res.status(400).json({
+          error:
+            "Resolving as failed re-opens the bounty for payment. Pass confirm: true after checking the wallet history.",
+        });
+      }
 
       const record = await prisma.transaction.findUnique({
         where: { id },
@@ -2724,28 +2762,39 @@ router.post(
         return res.status(409).json({ error: "already settled" });
       }
 
-      if (outcome === "broadcast") {
-        await prisma.$transaction([
-          prisma.transaction.update({
-            where: { id: record.id },
-            data: { status: "BROADCAST", txid, settledAt: new Date() },
-          }),
-          prisma.bounty.update({
+      const settledAt = new Date();
+      const alreadySettled = new Error("already-settled");
+
+      try {
+        await prisma.$transaction(async (tx) => {
+          // Compare-and-swap on UNKNOWN, so two admins resolving the same
+          // record can't both apply (one paying, one re-opening).
+          const { count } = await tx.transaction.updateMany({
+            where: { id: record.id, status: "UNKNOWN" },
+            data:
+              outcome === "broadcast"
+                ? {
+                    status: "BROADCAST",
+                    txid: txid.trim().toLowerCase(),
+                    settledAt,
+                  }
+                : { status: "FAILED", settledAt },
+          });
+          if (count !== 1) throw alreadySettled;
+
+          await tx.bounty.update({
             where: { id: record.bountyId },
-            data: { isPaid: true, paymentInFlight: false, paidAt: new Date() },
-          }),
-        ]);
-      } else {
-        await prisma.$transaction([
-          prisma.transaction.update({
-            where: { id: record.id },
-            data: { status: "FAILED", settledAt: new Date() },
-          }),
-          prisma.bounty.update({
-            where: { id: record.bountyId },
-            data: { paymentInFlight: false },
-          }),
-        ]);
+            data:
+              outcome === "broadcast"
+                ? { isPaid: true, paymentInFlight: false, paidAt: settledAt }
+                : { paymentInFlight: false },
+          });
+        });
+      } catch (err) {
+        if (err !== alreadySettled) throw err;
+        return res
+          .status(409)
+          .json({ error: "Record was settled by another request; refresh" });
       }
 
       await invalidateBounty(record.bountyId);
