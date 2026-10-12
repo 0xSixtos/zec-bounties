@@ -28,6 +28,7 @@ function loadHelpers(prisma, DateClass) {
     "./cache": { delCache: async () => {}, bumpVersion: async () => {} },
     "./sendMail": async () => {},
     "./notifyUser": async () => {},
+    "../middleware/websocket": { sendRealtimeUpdate: () => {} },
   }, DateClass);
 }
 
@@ -56,6 +57,7 @@ function loadRoutes(prisma) {
     "../utils/userSelects": require("../../utils/userSelects"),
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../utils/bountyHelpers": helpers,
+    "../utils/bountyActivity": { logActivity: noOp },
     "path": path,
     "multer": require("multer"),
     "fs": { promises: {} },
