@@ -180,22 +180,11 @@ router.get("/search", authenticate, async (req, res) => {
  * Privacy-filtered public profile. Auth optional (owner/admin see more).
  */
 
-const { resolveStaffUser, buildStaffView } = require("../utils/staffBounties");
-
-const STAFF_BOUNTY_SELECT = {
-  id: true,
-  title: true,
-  status: true,
-  chain: true,
-  bountyAmount: true,
-  isPrivate: true,
-  isPaid: true,
-  isApproved: true,
-  dateCreated: true,
-  completedAt: true,
-  paidAt: true,
-  team: { select: { name: true } },
-};
+const {
+  STAFF_BOUNTY_SELECT,
+  resolveStaffUser,
+  buildStaffView,
+} = require("../utils/staffBounties");
 
 function staffOffset(value) {
   const n = Number(value);
