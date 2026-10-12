@@ -9,6 +9,7 @@ const prisma = require("../prisma/client");
 const { delCache, bumpVersion } = require("./cache");
 const sendMail = require("./sendMail");
 const notifyUser = require("./notifyUser");
+const { sendRealtimeUpdate } = require("../middleware/websocket");
 
 // ─── Email settings ─────────────────────────────────────────────────────
 const ENABLE_EMAILS_IN_DEV = false; // Set to true when you want to test emails
@@ -61,21 +62,80 @@ async function getBroadcastRecipients(bounty) {
   admins.forEach((a) => recipients.add(a.id));
 
   if (bounty.teamId) {
-    const [members, favoriters] = await Promise.all([
-      prisma.teamMember.findMany({
-        where: { teamId: bounty.teamId },
-        select: { userId: true },
-      }),
-      prisma.teamFavorite.findMany({
-        where: { teamId: bounty.teamId },
-        select: { userId: true },
-      }),
-    ]);
+    const members = await prisma.teamMember.findMany({
+      where: { teamId: bounty.teamId },
+      select: { userId: true },
+    });
     members.forEach((m) => recipients.add(m.userId));
-    favoriters.forEach((f) => recipients.add(f.userId));
   }
 
   return [...recipients];
+}
+
+// Sends a realtime event about one team to the people allowed to see it.
+// membersOnly — internal team business (members, roles, wallets, payments):
+//   team members and platform admins, whatever the team's privacy.
+// otherwise — directory-level changes: everyone for a public team; for a
+//   private team, the same audience as its private bounties.
+// Fails closed, like broadcastBountyEvent.
+async function broadcastTeamEvent(
+  type,
+  payload,
+  teamId,
+  excludeUserId,
+  { membersOnly = false, extraUserIds = [] } = {},
+) {
+  try {
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      select: { isPrivate: true },
+    });
+    if (!team) return;
+
+    let recipients = null;
+    if (membersOnly) {
+      const [members, admins] = await Promise.all([
+        prisma.teamMember.findMany({
+          where: { teamId },
+          select: { userId: true },
+        }),
+        prisma.user.findMany({
+          where: { role: "ADMIN" },
+          select: { id: true },
+        }),
+      ]);
+      recipients = [
+        ...members.map((m) => m.userId),
+        ...admins.map((a) => a.id),
+        ...extraUserIds,
+      ];
+    } else if (team.isPrivate) {
+      recipients = await getBroadcastRecipients({ isPrivate: true, teamId });
+    }
+
+    sendRealtimeUpdate(type, payload, excludeUserId, recipients);
+  } catch (err) {
+    console.error(`Realtime ${type} for team ${teamId} not sent:`, err);
+  }
+}
+
+// Sends a realtime event about one bounty to that bounty's audience only:
+// everyone for a public bounty, getBroadcastRecipients() for a private one.
+// Looks the bounty up itself so callers can pass any payload shape
+// (bounty, submission, application, { bountyId }). Fails closed — if the
+// audience can't be resolved nothing is sent; clients refetch on their own.
+async function broadcastBountyEvent(type, payload, bountyId, excludeUserId) {
+  try {
+    const bounty = await prisma.bounty.findUnique({
+      where: { id: bountyId },
+      select: { isPrivate: true, createdBy: true, teamId: true },
+    });
+    if (!bounty) return;
+    const recipients = await getBroadcastRecipients(bounty);
+    sendRealtimeUpdate(type, payload, excludeUserId, recipients);
+  } catch (err) {
+    console.error(`Realtime ${type} for bounty ${bountyId} not sent:`, err);
+  }
 }
 
 // The ONE canonical bounty-cache invalidator. Every route in every router
@@ -207,16 +267,36 @@ async function createBountyWithQuota(user, args) {
     }
   }
 }
+const requireTaskCreation = async (req, res, next) => {
+  try {
+    const u = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { canCreateTasks: true },
+    });
+    if (!u?.canCreateTasks) {
+      return res
+        .status(403)
+        .json({ error: "You are blocked from creating tasks" });
+    }
+    next();
+  } catch (err) {
+    console.error("requireTaskCreation failed:", err);
+    res.status(500).json({ error: "Failed to verify task access" });
+  }
+};
 
 module.exports = {
   shouldSendEmails,
   sendMailIfEnabled,
   sendPushToOptedIn,
   getBroadcastRecipients,
+  broadcastBountyEvent,
+  broadcastTeamEvent,
   invalidateBounty,
   ONBOARDED_ROLES,
   requireOnboarded,
   getWeeklyBountyQuota,
   createBountyWithQuota,
   WeeklyBountyQuotaError,
+  requireTaskCreation,
 };
