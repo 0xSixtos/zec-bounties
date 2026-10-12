@@ -1,9 +1,16 @@
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const { existsSync } = require("fs");
+const { isSafeShieldedAddress } = require("../../helpers/validateAddress.js");
 
 async function executeZingoParseAddress(zaddress, params) {
   const command = "parse_address";
   if (!zaddress) throw new Error("No zaddress provided");
+
+  // Sink-level guard: never let a value that isn't a plain base58/bech32
+  // address reach the wallet CLI, regardless of what the caller validated.
+  if (!isSafeShieldedAddress(zaddress)) {
+    throw new Error("Invalid address");
+  }
 
   const zingoPath = process.env.ZINGO_CLI;
 
@@ -11,19 +18,25 @@ async function executeZingoParseAddress(zaddress, params) {
     throw new Error(`zingo-cli not found at ${zingoPath}`);
   }
 
+  // Pass each token as a separate argv element and run the binary directly
+  // (execFileSync does NOT spawn a shell), so nothing in `zaddress` can be
+  // interpreted as shell syntax.
   const args = [
-    `--chain ${params.chain || "testnet"}`,
-    `--server ${params.serverUrl || "https://testnet.zec.rocks:443"}`,
-    `--data-dir "${params.dataDir || "/error"}"`,
+    "--chain",
+    params.chain || "testnet",
+    "--server",
+    params.serverUrl || "https://testnet.zec.rocks:443",
+    "--data-dir",
+    params.dataDir || "/error",
     command,
     zaddress,
-  ].join(" ");
+  ];
 
-  console.log(args);
+  console.log(args.join(" "));
 
   try {
     // 1️⃣ Run CLI and capture full output
-    const rawOutput = execSync(`${zingoPath} ${args}`, {
+    const rawOutput = execFileSync(zingoPath, args, {
       stdio: "pipe",
     }).toString();
 

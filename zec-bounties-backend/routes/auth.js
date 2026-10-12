@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const prisma = require("../prisma/client");
 const { authenticate, isAdmin, signSessionToken, loadAuthUser } = require("../middleware/auth");
 const { verifyZaddress, verifyUaddress } = require("../helpers/db-query.js");
+const { isSafeShieldedAddress } = require("../helpers/validateAddress.js");
 const {
   getLatestZcashParams,
   getSystemWalletParams,
@@ -367,6 +368,15 @@ router.patch("/update-email-notifications", authenticate, async (req, res) => {
 router.post("/verify-zaddress", authenticate, async (req, res) => {
   try {
     const { z_address } = req.body;
+
+    // This value reaches zingo-cli's `parse_address` command. Reject anything
+    // that is not a plain base58/bech32 address before it gets there, so a
+    // shell metacharacter can never be interpreted as a command. (The sink is
+    // also hardened to avoid a shell; this is defence in depth.)
+    if (!isSafeShieldedAddress(z_address)) {
+      return res.status(400).json({ error: "Invalid z_address" });
+    }
+
     const params = getSystemWalletParams();
 
     const result = await verifyZaddress(z_address, params);
@@ -380,6 +390,11 @@ router.post("/verify-zaddress", authenticate, async (req, res) => {
 router.post("/verify-uaddress", authenticate, async (req, res) => {
   try {
     const { z_address } = req.body;
+
+    if (!isSafeShieldedAddress(z_address)) {
+      return res.status(400).json({ error: "Invalid address" });
+    }
+
     const params = getSystemWalletParams();
 
     const result = await verifyUaddress(z_address, params);
