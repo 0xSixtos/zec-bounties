@@ -36,11 +36,7 @@ const { randomUUID } = require("crypto");
 const { uploadToPinata, pinataUrl } = require("../utils/ipfs/pinata");
 const { REQUIRED_TEAM_VERIFICATIONS } = require("../utils/constants");
 const { validateBountyCreate, validateCategory } = require("../helpers/validateBounty");
-const {
-  USER_SELECT,
-  USER_SELECT_PUBLIC,
-  bountyUserSelects,
-} = require("../utils/userSelects");
+const { bountyUserSelects } = require("../utils/userSelects");
 const { notifyNewBounty } = require("../utils/discord/discordNotify");
 const {
   sendMailIfEnabled,
@@ -712,7 +708,6 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const userSelect = isAuthed ? USER_SELECT : USER_SELECT_PUBLIC;
     const {
       user: assigneeUserSelect,
       createdByUser: createdByUserSelect,
@@ -725,7 +720,7 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
         take: limit,
         orderBy: { dateCreated: "desc" },
         include: {
-          assignees: { include: { user: { select: userSelect } } },
+          assignees: { include: { user: { select: assigneeUserSelect } } },
           assigneeUser: { select: assigneeUserSelect },
           createdByUser: { select: createdByUserSelect },
         },
@@ -736,7 +731,6 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
     const result = { data: bounties, total, page, limit };
 
     await setCache(cacheKey, result, TTL.BOUNTY_LIST);
-    console.log("rope", result);
     return res.json(result);
   } catch (error) {
     console.error("Failed to fetch team bounties:", error);

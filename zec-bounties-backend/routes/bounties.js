@@ -510,7 +510,6 @@ router.get("/", optionalAuthenticate, async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const userSelect = isAuthed ? USER_SELECT : USER_SELECT_PUBLIC;
     const {
       user: assigneeUserSelect,
       createdByUser: createdByUserSelect,
@@ -523,7 +522,7 @@ router.get("/", optionalAuthenticate, async (req, res) => {
         take: limit,
         orderBy: { dateCreated: "desc" },
         include: {
-          assignees: { include: { user: { select: userSelect } } },
+          assignees: { include: { user: { select: assigneeUserSelect } } },
           assigneeUser: { select: assigneeUserSelect },
           createdByUser: { select: createdByUserSelect },
           team: { select: { id: true, name: true, logo: true } },
