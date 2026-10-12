@@ -1,6 +1,7 @@
 const { execFile } = require("child_process");
 const { existsSync } = require("fs");
 const { promisify } = require("util");
+const { isSafeShieldedAddress } = require("../../helpers/validateAddress.js");
 
 const { ADDRESS_PATTERN } = require("./replCommand");
 
