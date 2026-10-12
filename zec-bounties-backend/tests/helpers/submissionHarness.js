@@ -27,22 +27,28 @@ function load(relativePath, dependencies) {
 function loadSubmissionRoute(prisma) {
   const noOp = async () => {};
   const effects = { broadcasts: [], invalidations: [] };
+  const websocket = {
+    sendRealtimeUpdate: (...args) => effects.broadcasts.push(args),
+    sendToUser: (...args) => effects.broadcasts.push(args),
+    handleWebSocket() {},
+    getClientByUserId() { return null; },
+  };
+  const activity = load("utils/bountyActivity.js", {
+    "../prisma/client": prisma,
+    "../middleware/websocket": websocket,
+    "./userSelects": require("../../utils/userSelects"),
+  });
   const cache = {
     delCache: async (key) => effects.invalidations.push(key),
     deleteCacheByPattern: async (key) => effects.invalidations.push(key),
     bumpVersion: noOp,
   };
-    const helpers = load("utils/bountyHelpers.js", {
+  const helpers = load("utils/bountyHelpers.js", {
     "../prisma/client": prisma,
     "./cache": cache,
     "./sendMail": noOp,
     "./notifyUser": noOp,
-    "../middleware/websocket": {
-      sendRealtimeUpdate() {},
-      sendToUser() {},
-      handleWebSocket() {},
-      getClientByUserId() { return null; },
-    },
+    "../middleware/websocket": websocket,
   });
   let handler;
   const router = Object.fromEntries(["get", "post", "put", "delete", "patch"].map(method => [method,
@@ -55,12 +61,7 @@ function loadSubmissionRoute(prisma) {
     "../prisma/client": prisma,
     "../helpers/email": {},
     "../middleware/auth": { authenticate: noOp, isAdmin: noOp, optionalAuthenticate: noOp },
-    "../middleware/websocket": {
-	  sendRealtimeUpdate() {},
-	  sendToUser() {},
-	  handleWebSocket() {},
-	  getClientByUserId() { return null; },
-	},
+    "../middleware/websocket": websocket,
     "../utils/cache": cache,
     "../utils/sendMail": noOp,
     "../utils/notifyUser": noOp,
@@ -68,13 +69,10 @@ function loadSubmissionRoute(prisma) {
     "../utils/discord/discordAssignWebhook": {},
     "../utils/constants": {},
     "../helpers/validateBounty": {},
-"../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
+    "../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
     "../utils/userSelects": require("../../utils/userSelects"),
     "../utils/bountyHelpers": helpers,
-    "../utils/bountyActivity": {
-  logActivity: async () => {},
-  publishActivity: async () => {},
-},
+    "../utils/bountyActivity": activity,
   });
   return {
     effects,

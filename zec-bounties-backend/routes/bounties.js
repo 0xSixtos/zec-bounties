@@ -1150,9 +1150,9 @@ router.patch("/:id/status", authenticate, async (req, res) => {
         },
         include: {
           ...ASSIGNEE_INCLUDE,
-          assigneeUser: { select: USER_SELECT_FULL },
+          assigneeUser: { select: USER_SELECT },
           createdByUser: {
-            select: USER_SELECT_WITH_ROLE,
+            select: { ...USER_SELECT, role: true },
           },
           team: { select: { id: true, name: true, logo: true } },
         },
@@ -1172,13 +1172,13 @@ router.patch("/:id/status", authenticate, async (req, res) => {
       return { updated, activityRow };
     });
 
+    await invalidateBounty(bountyId);
     await broadcastBountyEvent(
       "bounty_status_changed",
       updated,
       bountyId,
       req.user.id,
     );
-    await invalidateBounty(bountyId);
     res.json(updated);
   } catch (error) {
     console.error(error);
@@ -1260,7 +1260,7 @@ router.post("/:id/submit", authenticate, async (req, res) => {
             },
             include: {
               submitterUser: {
-                select: USER_SELECT_BASIC,
+                select: USER_SELECT,
               },
             },
           });
@@ -1268,16 +1268,17 @@ router.post("/:id/submit", authenticate, async (req, res) => {
             where: { id: bountyId },
             data: { status: "IN_REVIEW" },
             include: {
+              ...ASSIGNEE_INCLUDE,
               createdByUser: {
-                select: USER_SELECT_WITH_ROLE,
+                select: { ...USER_SELECT, role: true },
               },
               assigneeUser: {
-                select: USER_SELECT_WITH_ROLE,
+                select: USER_SELECT,
               },
               workSubmissions: {
                 include: {
                   submitterUser: {
-                    select: USER_SELECT_BASIC,
+                    select: USER_SELECT,
                   },
                 },
               },
@@ -1299,10 +1300,12 @@ router.post("/:id/submit", authenticate, async (req, res) => {
     }
     const { workSubmission, updatedBounty, activityRow } = result;
 
+    // A receiving client may read immediately after any event.
+    await invalidateBounty(bountyId);
+    await invalidateSubmissions(bountyId, userId);
     publishActivity(activityRow);
     await broadcastBountyEvent("work_submitted", workSubmission, bountyId, userId);
     await broadcastBountyEvent("bounty_updated", updatedBounty, bountyId, userId);
-    await invalidateSubmissions(bountyId, userId);
 
     res.json({
       message: "Work submitted successfully",
@@ -1522,8 +1525,8 @@ router.patch(
                 reviewedAt: new Date(),
               },
               include: {
-                submitterUser: { select: USER_SELECT_BASIC },
-                reviewerUser: { select: USER_SELECT_BASIC },
+                submitterUser: { select: USER_SELECT },
+                reviewerUser: { select: USER_SELECT },
               },
             });
 
@@ -1554,9 +1557,21 @@ router.patch(
                   }),
               },
               include: {
-                createdByUser: { select: USER_SELECT_WITH_ROLE },
-                assigneeUser: { select: USER_SELECT_WITH_ROLE },
+                ...ASSIGNEE_INCLUDE,
+                createdByUser: { select: { ...USER_SELECT, role: true } },
+                assigneeUser: { select: USER_SELECT },
                 team: { select: { id: true, name: true, logo: true } },
+              },
+            });
+            await logActivity(tx, {
+              bountyId: updBounty.id,
+              actorId: userId,
+              type: `SUBMISSION_${status.toUpperCase()}`,
+              meta: {
+                submitter:
+                  updSub.submitterUser?.nickname ||
+                  updSub.submitterUser?.name,
+                ...(reviewNotes?.trim() && { notes: reviewNotes.trim() }),
               },
             });
             return { updatedSubmission: updSub, updatedBounty: updBounty };
@@ -1571,18 +1586,8 @@ router.patch(
       }
       const { updatedSubmission, updatedBounty } = result;
 
-      await logActivity(null, {
-        bountyId: updatedBounty.id,
-        actorId: userId,
-        type: `SUBMISSION_${status.toUpperCase()}`,
-        meta: {
-          submitter:
-            updatedSubmission.submitterUser?.nickname ||
-            updatedSubmission.submitterUser?.name,
-          ...(reviewNotes?.trim() && { notes: reviewNotes.trim() }),
-        },
-      });
-
+      await invalidateSubmissions(updatedBounty.id, updatedSubmission.submittedBy);
+      await invalidateBounty(updatedBounty.id);
       await broadcastBountyEvent(
         "submission_reviewed",
         updatedSubmission,
@@ -1595,8 +1600,6 @@ router.patch(
         updatedBounty.id,
         req.user.id,
       );
-      await invalidateSubmissions(updatedBounty.id, updatedSubmission.submittedBy);
-      await invalidateBounty(updatedBounty.id);
 
       res.json({
         message: "Submission reviewed successfully",
@@ -1687,7 +1690,7 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
       if (edited.count !== 1) throw editConflict;
       const updSub = await tx.workSubmission.findUnique({
         where: { id: submissionId },
-        include: { submitterUser: { select: USER_SELECT_BASIC } },
+        include: { submitterUser: { select: USER_SELECT } },
       });
 
       let updBounty = null;
@@ -1707,8 +1710,8 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
           include: {
             ...ASSIGNEE_INCLUDE,
             team: { select: { id: true, name: true, logo: true } },
-            createdByUser: { select: USER_SELECT_WITH_ROLE },
-            assigneeUser: { select: USER_SELECT_WITH_ROLE },
+            createdByUser: { select: { ...USER_SELECT, role: true } },
+            assigneeUser: { select: USER_SELECT },
           },
         });
       }
@@ -1716,6 +1719,8 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
       return [updSub, updBounty];
     });
 
+    await invalidateSubmissions(submission.bountyId, userId);
+    if (wasRevision) await invalidateBounty(submission.bountyId);
     await broadcastBountyEvent(
       "submission_edited",
       updated,
@@ -1729,8 +1734,6 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
         submission.bountyId,
         userId,
       );
-    await invalidateSubmissions(submission.bountyId, userId);
-    if (wasRevision) await invalidateBounty(submission.bountyId);
 
     res.json({
       message: "Submission updated successfully",
