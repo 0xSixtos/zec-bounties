@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams, usePathname, useRouter } from "next/navigation";
 import { AdminNavbar } from "@/components/layout/admin/navbar";
@@ -28,13 +28,39 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { AdminBountyModal } from "@/components/admin-bounty-modal";
 import { BountyDetailModal } from "@/components/bounty-detail-modal";
+import { RepoFilter } from "@/components/repo-filter";
+import { bountyRepo, type RepoId } from "@/lib/repos";
 import { Bounty } from "@/lib/types";
 import { useBounty } from "@/lib/bounty-context";
+import { bountyMatchesQuery, parseUserSearchQuery } from "@/lib/userIdentity";
 import type { BountyStatus } from "@/lib/types";
 import { formatStatus } from "@/lib/utils";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { Input } from "@/components/ui/input";
 import { WalletGuard } from "@/components/settings/wallet-guard";
+import { backendUrl } from "@/lib/configENV";
+import { profileHref } from "@/lib/profileHref";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+
+const STATUS_DOT: Record<BountyStatus, string> = {
+  TO_DO: "bg-slate-400",
+  IN_PROGRESS: "bg-blue-500",
+  IN_REVIEW: "bg-yellow-500",
+  DONE: "bg-green-500",
+  CANCELLED: "bg-red-500",
+};
+
+const MARKETPLACE_STATUS_FILTERS: {
+  status: BountyStatus | "all";
+  label: string;
+}[] = [
+  { status: "all", label: "All" },
+  { status: "TO_DO", label: "Todo" },
+  { status: "IN_PROGRESS", label: "In Progress" },
+  { status: "IN_REVIEW", label: "In Review" },
+  { status: "DONE", label: "Done" },
+  { status: "CANCELLED", label: "Cancelled" },
+];
 
 const DEFRAG_STATUS_COLORS: Record<BountyStatus, string> = {
   TO_DO: "bg-cyan-400",
@@ -72,6 +98,7 @@ export default function MarketplacePage() {
     categories,
     createCategory,
     fetchBountyById,
+    fetchBounties,
   } = useBounty();
 
   const router = useRouter();
@@ -79,8 +106,65 @@ export default function MarketplacePage() {
   const searchParams = useSearchParams();
 
   const [activeCategory, setActiveCategory] = useState("All");
+  const [activeRepo, setActiveRepo] = useState<RepoId | "all" | "untagged">("all");
   const [viewMode, setViewMode] = useState<"grid" | "list" | "defrag">("grid");
   const [searchQuery, setSearchQuery] = useState("");
+  const serverUser = parseUserSearchQuery(searchQuery).user;
+  const [people, setPeople] = useState<
+    Array<{
+      id: string;
+      name?: string | null;
+      nickname?: string | null;
+      avatar?: string | null;
+      role?: string | null;
+      discordUsername?: string | null;
+    }>
+  >([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+
+  useEffect(() => {
+    if (!fetchBounties) return;
+    const t = setTimeout(() => {
+      fetchBounties(true, serverUser ? { user: serverUser } : { user: "" });
+    }, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverUser]);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setPeople([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setPeopleLoading(true);
+      try {
+        const token =
+          typeof window !== "undefined"
+            ? localStorage.getItem("authToken")
+            : null;
+        const res = await fetch(
+          `${backendUrl}/api/users/search?q=${encodeURIComponent(q.replace(/^@/, "").replace(/^user:/i, ""))}`,
+          {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          },
+        );
+        if (!res.ok) {
+          setPeople([]);
+          return;
+        }
+        const json = await res.json();
+        setPeople(Array.isArray(json.data) ? json.data : []);
+      } catch {
+        setPeople([]);
+      } finally {
+        setPeopleLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [searchQuery]);
+
   const [statusFilter, setStatusFilter] = useState<BountyStatus | "all">("all");
   const [isAdminBountyModalOpen, setIsAdminBountyModalOpen] = useState(false);
   const [selectedBounty, setSelectedBounty] = useState<Bounty | null>(null);
@@ -90,6 +174,38 @@ export default function MarketplacePage() {
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [categoryError, setCategoryError] = useState("");
+
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!hasMoreBounties || viewMode === "defrag") return;
+
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !bountiesLoading) {
+          loadMoreBounties();
+        }
+      },
+      { rootMargin: "400px" },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreBounties, bountiesLoading, loadMoreBounties, viewMode]);
+
+  const defragLoadStarted = useRef(false);
+  useEffect(() => {
+    if (viewMode !== "defrag") {
+      defragLoadStarted.current = false;
+      return;
+    }
+    if (!hasMoreBounties || bountiesLoading || defragLoadStarted.current) return;
+    defragLoadStarted.current = true;
+    loadAllBounties();
+  }, [viewMode, hasMoreBounties, bountiesLoading, loadAllBounties]);
 
   const openBounty = (bounty: Bounty) => {
     setSelectedBounty(bounty);
@@ -131,6 +247,46 @@ export default function MarketplacePage() {
 
   const displayCategories = ["All", ...categories.map((cat) => cat.name)];
 
+  const categorySearchFilteredBounties = useMemo(() => {
+    let filtered = bounties;
+
+    if (activeCategory !== "All") {
+      filtered = filtered.filter(
+        (bounty) => bounty.categoryId === activeCategory,
+      );
+    }
+
+    if (searchQuery.trim()) {
+      filtered = filtered.filter((bounty) =>
+        bountyMatchesQuery(bounty, searchQuery),
+      );
+    }
+
+    return filtered;
+  }, [bounties, activeCategory, searchQuery]);
+
+  const repoCounts = useMemo(() => {
+    const counts = {
+      namada: 0,
+      zechub: 0,
+      "zechub-wiki": 0,
+      "zec-bounties": 0,
+      untagged: 0,
+    };
+    for (const bounty of categorySearchFilteredBounties) {
+      const repo = bountyRepo(bounty);
+      if (repo) counts[repo] += 1;
+      else counts.untagged += 1;
+    }
+    return counts;
+  }, [categorySearchFilteredBounties]);
+
+  const statusCountFor = (status: BountyStatus | "all") =>
+    status === "all"
+      ? categorySearchFilteredBounties.length
+      : categorySearchFilteredBounties.filter((b) => b.status === status)
+          .length;
+
   const filteredBounties = useMemo(() => {
     let filtered = bounties;
 
@@ -141,12 +297,8 @@ export default function MarketplacePage() {
     }
 
     if (searchQuery.trim()) {
-      const searchLower = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (bounty) =>
-          bounty.title.toLowerCase().includes(searchLower) ||
-          bounty.description.toLowerCase().includes(searchLower) ||
-          bounty.createdByUser?.name?.toLowerCase().includes(searchLower),
+      filtered = filtered.filter((bounty) =>
+        bountyMatchesQuery(bounty, searchQuery),
       );
     }
 
@@ -154,11 +306,19 @@ export default function MarketplacePage() {
       filtered = filtered.filter((bounty) => bounty.status === statusFilter);
     }
 
+    if (activeRepo !== "all") {
+      filtered = filtered.filter((bounty) =>
+        activeRepo === "untagged"
+          ? bountyRepo(bounty) == null
+          : bountyRepo(bounty) === activeRepo,
+      );
+    }
+
     return filtered.sort(
       (a, b) =>
         new Date(b.dateCreated).getTime() - new Date(a.dateCreated).getTime(),
     );
-  }, [bounties, searchQuery, activeCategory, statusFilter]);
+  }, [bounties, searchQuery, activeCategory, statusFilter, activeRepo]);
 
   const defragBounties = useMemo(() => {
     return [...filteredBounties].sort((a, b) => {
@@ -317,6 +477,7 @@ export default function MarketplacePage() {
           </aside>
 
           <div className="lg:col-span-3 space-y-6">
+            <RepoFilter value={activeRepo} onChange={setActiveRepo} counts={repoCounts} />
             <div className="flex items-center justify-between pb-4 border-b">
               <h2 className="text-xl font-bold">
                 {activeCategory === "All"
@@ -350,6 +511,82 @@ export default function MarketplacePage() {
                   <Grid3X3 className="h-4 w-4" />
                 </Button>
               </div>
+            </div>
+
+            {searchQuery.trim().length >= 2 && (
+              <div className="rounded-xl border bg-card/40 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                    People
+                  </h3>
+                  <span className="text-[11px] text-muted-foreground">
+                    {peopleLoading
+                      ? "searching…"
+                      : `${people.length} match${people.length === 1 ? "" : "es"}`}
+                  </span>
+                </div>
+                {people.length === 0 && !peopleLoading ? (
+                  <p className="text-sm text-muted-foreground">
+                    No profiles for “{searchQuery.trim()}”. Bounty matches are
+                    below.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {people.map((user) => (
+                      <Link
+                        key={user.id}
+                        href={profileHref(user)}
+                        className="inline-flex items-center gap-2 rounded-full border bg-background px-2.5 py-1 text-sm hover:border-primary/50 hover:bg-muted/60"
+                        title="Open profile"
+                      >
+                        <Avatar className="h-6 w-6 border">
+                          <AvatarImage src={user.avatar || undefined} />
+                          <AvatarFallback className="text-[10px]">
+                            {(user.nickname || user.name || "?").charAt(0)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="font-medium">
+                          {user.nickname || user.name || "User"}
+                        </span>
+                        {user.nickname && user.name && user.name !== user.nickname && (
+                          <span className="text-xs text-muted-foreground">
+                            {user.name}
+                          </span>
+                        )}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div
+              style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+            >
+              {MARKETPLACE_STATUS_FILTERS.map((f) => {
+                const active = statusFilter === f.status;
+                return (
+                  <button
+                    key={f.status}
+                    onClick={() => setStatusFilter(f.status)}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      active
+                        ? "border-primary/40 bg-primary/10 font-medium text-foreground"
+                        : "border-border text-muted-foreground hover:bg-muted/60"
+                    }`}
+                  >
+                    {f.status !== "all" && (
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[f.status]}`}
+                      />
+                    )}
+                    {f.label}
+                    <span className="tabular-nums opacity-60">
+                      {statusCountFor(f.status)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
             {viewMode === "defrag" ? (
@@ -419,7 +656,8 @@ export default function MarketplacePage() {
                           </SheetHeader>
                           <div className="mt-4 flex-1 overflow-y-auto pr-1">
                             <ul className="space-y-1">
-                              {defragBounties.map((bounty) => {
+                              {defragListOpen &&
+                                defragBounties.map((bounty) => {
                                 const color =
                                   DEFRAG_STATUS_COLORS[bounty.status] ??
                                   "bg-zinc-600";
@@ -532,22 +770,16 @@ export default function MarketplacePage() {
             )}
 
             {hasMoreBounties && viewMode !== "defrag" && (
-              <div className="pt-8 flex justify-center">
-                <Button
-                  variant="outline"
-                  className="rounded-full px-8 bg-transparent"
-                  onClick={loadMoreBounties}
-                  disabled={bountiesLoading}
-                >
-                  {bountiesLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Loading…
-                    </>
-                  ) : (
-                    "Load More Bounties"
-                  )}
-                </Button>
+              <div
+                ref={loadMoreSentinelRef}
+                className="pt-8 flex justify-center text-xs text-muted-foreground"
+              >
+                {bountiesLoading && (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading more…
+                  </span>
+                )}
               </div>
             )}
           </div>

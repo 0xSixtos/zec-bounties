@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { BountyDetailModal } from "@/components/bounty-detail-modal";
+import { RepoFilter } from "@/components/repo-filter";
+import { bountyRepo, type RepoId } from "@/lib/repos";
 import { Bounty } from "@/lib/types";
 import { useBounty } from "@/lib/bounty-context";
 import type { BountyStatus } from "@/lib/types";
@@ -69,6 +71,7 @@ export default function RootPage() {
   const searchParams = useSearchParams();
 
   const [activeCategory, setActiveCategory] = useState("All");
+  const [activeRepo, setActiveRepo] = useState<RepoId | "all" | "untagged">("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBounty, setSelectedBounty] = useState<Bounty | null>(null);
@@ -124,7 +127,7 @@ export default function RootPage() {
 
   const displayCategories = ["All", ...categories.map((c) => c.name)];
 
-  const filteredBounties = useMemo(() => {
+  const categoryFilteredBounties = useMemo(() => {
     let filtered = bounties;
     if (activeCategory !== "All")
       filtered = filtered.filter((b) => b.categoryId === activeCategory);
@@ -137,11 +140,39 @@ export default function RootPage() {
           b.createdByUser?.name?.toLowerCase().includes(q),
       );
     }
+    return filtered;
+  }, [bounties, searchQuery, activeCategory]);
+
+  const repoCounts = useMemo(() => {
+    const counts = {
+      namada: 0,
+      zechub: 0,
+      "zechub-wiki": 0,
+      "zec-bounties": 0,
+      untagged: 0,
+    };
+    for (const bounty of categoryFilteredBounties) {
+      const repo = bountyRepo(bounty);
+      if (repo) counts[repo] += 1;
+      else counts.untagged += 1;
+    }
+    return counts;
+  }, [categoryFilteredBounties]);
+
+  const filteredBounties = useMemo(() => {
+    const filtered =
+      activeRepo === "all"
+        ? categoryFilteredBounties
+        : categoryFilteredBounties.filter((bounty) =>
+            activeRepo === "untagged"
+              ? bountyRepo(bounty) == null
+              : bountyRepo(bounty) === activeRepo,
+          );
     return filtered.sort(
       (a, b) =>
         new Date(b.dateCreated).getTime() - new Date(a.dateCreated).getTime(),
     );
-  }, [bounties, searchQuery, activeCategory]);
+  }, [categoryFilteredBounties, activeRepo]);
 
   const kanbanGroups = useMemo(
     () =>
@@ -249,6 +280,7 @@ export default function RootPage() {
           </aside>
 
           <div className="lg:col-span-3 space-y-6 min-w-0 flex-1">
+            <RepoFilter value={activeRepo} onChange={setActiveRepo} counts={repoCounts} />
             <div className="flex items-center justify-between pb-4 border-b">
               <h2 className="text-xl font-bold">
                 {activeCategory === "All"
@@ -261,32 +293,47 @@ export default function RootPage() {
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => setViewMode("grid")}
+                  aria-label="Show bounties in grid view"
+                  aria-pressed={viewMode === "grid"}
                 >
-                  <LayoutGrid className="h-4 w-4" />
+                   <LayoutGrid className="h-4 w-4" aria-hidden="true" />
                 </Button>
                 <Button
                   variant={viewMode === "list" ? "secondary" : "ghost"}
                   size="icon"
                   className="h-8 w-8"
                   onClick={() => setViewMode("list")}
+                  aria-label="Show bounties in list view"
+                  aria-pressed={viewMode === "list"}
                 >
-                  <List className="h-4 w-4" />
+                 <List className="h-4 w-4" aria-hidden="true" />
                 </Button>
                 {hasMoreBounties &&
                   !searchQuery &&
                   activeCategory === "All" && (
                     <div className="relative group">
                       <Button
-                        variant="ghost"
+                       variant="ghost"
                         size="icon"
                         className="h-8 w-8"
                         onClick={handleLoadMore}
                         disabled={isLoadingMore || bountiesLoading}
+                        aria-label={
+                          isLoadingMore || bountiesLoading
+                            ? "Loading more bounties"
+                            : "Load more bounties"
+                        }
                       >
                         {isLoadingMore || bountiesLoading ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <Loader2
+                            className="h-4 w-4 animate-spin"
+                            aria-hidden="true"
+                          />
                         ) : (
-                          <ChevronsDown className="h-4 w-4" />
+                          <ChevronsDown
+                            className="h-4 w-4"
+                            aria-hidden="true"
+                          />
                         )}
                       </Button>
                       <span className="pointer-events-none absolute right-0 top-full mt-1.5 whitespace-nowrap rounded-md bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-10">

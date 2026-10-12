@@ -32,6 +32,8 @@ import {
   SlidersHorizontal,
   Check,
   Plus,
+  Eye,
+  Pencil,
 } from "lucide-react";
 import {
   Table,
@@ -58,13 +60,17 @@ import {
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { AdminBountyModal } from "@/components/admin-bounty-modal";
+import { BountyDetailModal } from "@/components/bounty-detail-modal";
+import { BountyRepoMark, RepoFilter } from "@/components/repo-filter";
+import { bountyRepo, type RepoId } from "@/lib/repos";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { useBounty } from "@/lib/bounty-context";
 import { BountyStatus, WorkSubmission, Bounty } from "@/lib/types";
 import { formatStatus } from "@/lib/utils";
-import { format } from "date-fns";
+import { format, startOfWeek } from "date-fns";
 import { GlobalSettingsModal } from "@/components/settings/global-settings-modal";
 import { PaymentTxIdsTable } from "@/components/transactions/payment-tx-table";
 import { PaymentRecordsTable } from "@/components/transactions/payment-records-table";
@@ -81,6 +87,12 @@ import {
 } from "@/components/ui/tooltip";
 import { ExportCompletedModal } from "@/components/payments/export-completed-modal";
 import { displayName } from "@/lib/displayName";
+import { bountyMatchesQuery, parseUserSearchQuery } from "@/lib/userIdentity";
+import { ProfileLink } from "@/components/profile-link";
+import { profileHref } from "@/lib/profileHref";
+import { backendUrl } from "@/lib/configENV";
+import Link from "next/link";
+import { parseLinks } from "@/lib/links";
 
 /* ------------------------------------------------------------------ */
 /* Status metadata — single source of truth (kills the repeated ternaries) */
@@ -215,6 +227,210 @@ function CountPill({
 }
 
 /* ------------------------------------------------------------------ */
+/* Shared row-actions menu — used by both the desktop table and the    */
+/* mobile card list so "view" vs "edit" vs status/manage actions stay  */
+/* in exactly one place.                                               */
+/* ------------------------------------------------------------------ */
+
+function BountyActionsMenu({
+  bounty,
+  pendingApps,
+  pendingSubs,
+  onView,
+  onEdit,
+  onStatusChange,
+  onApprovalChange,
+  onViewApplications,
+  onViewSubmissions,
+  onCancel,
+  triggerClassName = "h-8 w-8",
+}: {
+  bounty: Bounty;
+  pendingApps: number;
+  pendingSubs: number;
+  onView: () => void;
+  onEdit: () => void;
+  onStatusChange: (status: BountyStatus) => void;
+  onApprovalChange: (approved: boolean) => void;
+  onViewApplications: () => void;
+  onViewSubmissions: () => void;
+  onCancel: () => void;
+  triggerClassName?: string;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className={triggerClassName}
+          aria-label={`Actions for ${bounty.title}`}
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuItem onClick={onView}>
+          <Eye className="mr-2 h-4 w-4" />
+          View Details
+        </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Change Status</DropdownMenuLabel>
+        <DropdownMenuItem onClick={() => onStatusChange("TO_DO")}>
+          <StatusDot status="TO_DO" className="mr-2 h-2 w-2" />
+          Set To Do
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onStatusChange("IN_PROGRESS")}>
+          <StatusDot status="IN_PROGRESS" className="mr-2 h-2 w-2" />
+          Set In Progress
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onStatusChange("IN_REVIEW")}>
+          <StatusDot status="IN_REVIEW" className="mr-2 h-2 w-2" />
+          Set In Review
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onStatusChange("DONE")}>
+          <StatusDot status="DONE" className="mr-2 h-2 w-2" />
+          Mark as Done
+        </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Manage</DropdownMenuLabel>
+        <DropdownMenuItem onClick={onViewApplications}>
+          <Users className="mr-2 h-4 w-4" />
+          View Applications
+          {pendingApps > 0 && (
+            <span className="ml-auto text-[11px] text-muted-foreground">
+              {pendingApps}
+            </span>
+          )}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onViewSubmissions}>
+          <Upload className="mr-2 h-4 w-4" />
+          Review Submissions
+          {pendingSubs > 0 && (
+            <span className="ml-auto text-[11px] text-muted-foreground">
+              {pendingSubs}
+            </span>
+          )}
+        </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Approval</DropdownMenuLabel>
+        <DropdownMenuItem
+          onClick={() => onApprovalChange(true)}
+          disabled={bounty.isApproved}
+        >
+          <CheckCircle2 className="mr-2 h-4 w-4" />
+          Approve Bounty
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => onApprovalChange(false)}
+          disabled={!bounty.isApproved}
+          className="text-destructive"
+        >
+          <AlertTriangle className="mr-2 h-4 w-4" />
+          Reject Bounty
+        </DropdownMenuItem>
+
+        {/* Destructive action isolated at the bottom */}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={onCancel} className="text-destructive">
+          <XCircle className="mr-2 h-4 w-4" />
+          Cancel Bounty
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Assignee grouping — collapses identical assignee sets into one       */
+/* header row with an open count, sorted alphabetically (unassigned     */
+/* last).                                                                */
+/* ------------------------------------------------------------------ */
+
+function getAssigneeGroup(bounty: Bounty): { key: string; label: string } {
+  if (bounty.assignees && bounty.assignees.length > 0) {
+    const ids = bounty.assignees
+      .map((a) => a.userId)
+      .sort()
+      .join(",");
+    const label =
+      bounty.assignees.length === 1
+        ? displayName(bounty.assignees[0].user)
+        : bounty.assignees
+            .map((a) => displayName(a.user))
+            .sort((a, b) =>
+              a.localeCompare(b, undefined, { sensitivity: "base" }),
+            )
+            .join(", ");
+    return { key: `ids:${ids}`, label };
+  }
+
+  if (bounty.assignee && bounty.assigneeUser) {
+    return {
+      key: `ids:${bounty.assignee}`,
+      label: displayName(bounty.assigneeUser),
+    };
+  }
+
+  return { key: "unassigned", label: "Unassigned" };
+}
+
+/* ------------------------------------------------------------------ */
+/* Week grouping — collapses bounties into the ISO-ish (Mon-start) week */
+/* they were created in, newest week first. "This Week" / "Last Week"   */
+/* get friendly labels; anything older gets a date range.               */
+/* ------------------------------------------------------------------ */
+
+function getWeekGroup(bounty: Bounty): {
+  key: string;
+  label: string;
+  start: Date;
+} {
+  const created = bounty.dateCreated
+    ? new Date(bounty.dateCreated)
+    : new Date(0);
+  const start = startOfWeek(created, { weekStartsOn: 1 });
+  const key = start.toISOString();
+
+  const thisWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+  const diffWeeks = Math.round(
+    (thisWeekStart.getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000),
+  );
+
+  let label: string;
+  if (diffWeeks === 0) {
+    label = "This Week";
+  } else if (diffWeeks === 1) {
+    label = "Last Week";
+  } else {
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const sameYear = start.getFullYear() === end.getFullYear();
+    label = sameYear
+      ? `${format(start, "MMM d")} – ${format(end, "MMM d, yyyy")}`
+      : `${format(start, "MMM d, yyyy")} – ${format(end, "MMM d, yyyy")}`;
+  }
+
+  return { key, label, start };
+}
+
+type BountyRow = {
+  bounty: Bounty;
+  appCount: number;
+  pendingApps: number;
+  submissionCount: number;
+  pendingSubs: number;
+};
+
+type BountyTableRow =
+  | { type: "week"; key: string; label: string; count: number }
+  | { type: "group"; key: string; label: string; count: number }
+  | ({ type: "bounty" } & BountyRow);
+
+/* ------------------------------------------------------------------ */
 
 export default function AdminDashboard() {
   useRoleGuard("ADMIN");
@@ -225,6 +441,7 @@ export default function AdminDashboard() {
     bountiesLoading,
     hasMoreBounties,
     loadMoreBounties,
+    loadAllBounties,
     updateBountyStatus,
     updateBounty,
     approveBounty,
@@ -247,6 +464,7 @@ export default function AdminDashboard() {
     statusCounts,
     unpaidDoneCount,
     categories,
+    fetchBounties,
   } = useBounty();
 
   const [activeTab, setActiveTab] = useState<"overview" | "payments" | "txids">(
@@ -256,6 +474,9 @@ export default function AdminDashboard() {
     BountyStatus | "ALL"
   >("ALL");
   const [categoryFilter, setCategoryFilter] = useState<string | "ALL">("ALL");
+  const [repoFilter, setRepoFilter] = useState<RepoId | "all" | "untagged">(
+    "all",
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
   const [showAdminBountyModal, setShowAdminBountyModal] = useState(false);
@@ -268,6 +489,9 @@ export default function AdminDashboard() {
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   const [isFetchingTxHashes, setIsFetchingTxHashes] = useState(false);
 
+  // Read-only detail view — kept for the "View Details" menu action, but
+  // no longer the default click target for a bounty's title/row.
+  const [viewingBounty, setViewingBounty] = useState<Bounty | null>(null);
   const [editingBounty, setEditingBounty] = useState<Bounty | null>(null);
   const [assigneeSectionBounty, setAssigneeSectionBounty] =
     useState<Bounty | null>(null);
@@ -276,6 +500,76 @@ export default function AdminDashboard() {
   const [showCancelledBounties, setShowCancelledBounties] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [txSubTab, setTxSubTab] = useState<"payouts" | "wallet">("wallet");
+  const [loadingAll, setLoadingAll] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const serverUser = parseUserSearchQuery(searchQuery).user;
+  const [people, setPeople] = useState<
+    Array<{
+      id: string;
+      name?: string | null;
+      nickname?: string | null;
+      avatar?: string | null;
+      role?: string | null;
+      discordUsername?: string | null;
+    }>
+  >([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [groupByAssignee, setGroupByAssignee] = useState(false);
+  const [groupByWeek, setGroupByWeek] = useState(true);
+
+  // User search stays on the admin list. Server does the involvement filter;
+  // we load every page and skip the client-side re-filter so cancelled and
+  // partial matches are not dropped.
+  useEffect(() => {
+    if (!fetchBounties) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      await fetchBounties(
+        true,
+        serverUser ? { user: serverUser } : { user: "" },
+      );
+      if (cancelled || !serverUser) return;
+      await loadAllBounties();
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverUser]);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (q.length < 2) {
+      setPeople([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setPeopleLoading(true);
+      try {
+        const token =
+          typeof window !== "undefined"
+            ? localStorage.getItem("authToken")
+            : null;
+        const cleaned = q.replace(/^@/, "").replace(/^user:/i, "");
+        const res = await fetch(
+          `${backendUrl}/api/users/search?q=${encodeURIComponent(cleaned)}`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        );
+        if (!res.ok) {
+          setPeople([]);
+          return;
+        }
+        const json = await res.json();
+        setPeople(Array.isArray(json.data) ? json.data : []);
+      } catch {
+        setPeople([]);
+      } finally {
+        setPeopleLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Filtered bounties for the table
   const chainFilteredBounties = useMemo(
@@ -289,12 +583,27 @@ export default function AdminDashboard() {
         ? chainFilteredBounties
         : chainFilteredBounties.filter((b) => b.status === bountyStatusFilter);
 
-    if (bountyStatusFilter === "ALL" && !showCancelledBounties) {
+    // User search already filtered by involvement server-side. Keep cancelled
+    // and skip the title/description re-filter so the admin table matches the
+    // full involvement set.
+    if (bountyStatusFilter === "ALL" && !showCancelledBounties && !serverUser) {
       result = result.filter((b) => b.status !== "CANCELLED");
     }
 
     if (categoryFilter !== "ALL") {
       result = result.filter((b) => b.categoryId === categoryFilter);
+    }
+
+    if (searchQuery.trim() && !serverUser) {
+      result = result.filter((b) => bountyMatchesQuery(b, searchQuery));
+    }
+
+    if (repoFilter !== "all") {
+      result = result.filter((b) =>
+        repoFilter === "untagged"
+          ? bountyRepo(b) == null
+          : bountyRepo(b) === repoFilter,
+      );
     }
 
     return result;
@@ -303,13 +612,185 @@ export default function AdminDashboard() {
     bountyStatusFilter,
     showCancelledBounties,
     categoryFilter,
+    searchQuery,
+    repoFilter,
   ]);
+
+  const repoCounts = useMemo(() => {
+    let result =
+      bountyStatusFilter === "ALL"
+        ? chainFilteredBounties
+        : chainFilteredBounties.filter((b) => b.status === bountyStatusFilter);
+    if (bountyStatusFilter === "ALL" && !showCancelledBounties && !serverUser) {
+      result = result.filter((b) => b.status !== "CANCELLED");
+    }
+    if (categoryFilter !== "ALL") {
+      result = result.filter((b) => b.categoryId === categoryFilter);
+    }
+    if (searchQuery.trim() && !serverUser) {
+      result = result.filter((b) => bountyMatchesQuery(b, searchQuery));
+    }
+    const counts = {
+      namada: 0,
+      zechub: 0,
+      "zechub-wiki": 0,
+      "zec-bounties": 0,
+      untagged: 0,
+    };
+    for (const bounty of result) {
+      const repo = bountyRepo(bounty);
+      if (repo) counts[repo] += 1;
+      else counts.untagged += 1;
+    }
+    return counts;
+  }, [
+    chainFilteredBounties,
+    bountyStatusFilter,
+    showCancelledBounties,
+    categoryFilter,
+    searchQuery,
+  ]);
+
+  // Precompute per-bounty application/submission counts once, so the
+  // desktop table and the mobile card list can share the exact same data
+  // instead of re-deriving it in two places.
+  const bountyRows = useMemo(
+    () =>
+      filteredBounties.map((bounty) => {
+        const applications = getAllApplicationsForBounty(bounty.id);
+        const appCount = applications?.length || 0;
+        const pendingApps =
+          applications?.filter((a) => a.status === "pending").length || 0;
+
+        const submissions = allSubmissions.filter(
+          (s) => s.bountyId === bounty.id,
+        );
+        const submissionCount = submissions.length;
+        const pendingSubs = submissions.filter(
+          (s) => s.status === "pending",
+        ).length;
+
+        return { bounty, appCount, pendingApps, submissionCount, pendingSubs };
+      }),
+    [filteredBounties, getAllApplicationsForBounty, allSubmissions],
+  );
+
+  // Desktop-only grouping: collapses bounties under week headers (by
+  // creation date, newest first) and/or assignee headers with an open
+  // count. When both are on, weeks are the outer grouping and assignees
+  // are nested inside each week. Mobile cards stay flat regardless.
+  const bountyTableRows = useMemo<BountyTableRow[]>(() => {
+    if (!groupByWeek && !groupByAssignee) {
+      return bountyRows.map((row) => ({ type: "bounty" as const, ...row }));
+    }
+
+    const assigneeCompare = (a: BountyRow, b: BountyRow) => {
+      const ga = getAssigneeGroup(a.bounty);
+      const gb = getAssigneeGroup(b.bounty);
+      if (ga.key === "unassigned" && gb.key !== "unassigned") return 1;
+      if (gb.key === "unassigned" && ga.key !== "unassigned") return -1;
+      const byName = ga.label.localeCompare(gb.label, undefined, {
+        sensitivity: "base",
+      });
+      if (byName !== 0) return byName;
+      return a.bounty.title.localeCompare(b.bounty.title, undefined, {
+        sensitivity: "base",
+      });
+    };
+
+    if (groupByWeek) {
+      const weekBuckets = new Map<
+        string,
+        { label: string; rows: BountyRow[] }
+      >();
+
+      for (const row of bountyRows) {
+        const week = getWeekGroup(row.bounty);
+        if (!weekBuckets.has(week.key)) {
+          weekBuckets.set(week.key, { label: week.label, rows: [] });
+        }
+        weekBuckets.get(week.key)!.rows.push(row);
+      }
+
+      const rows: BountyTableRow[] = [];
+
+      for (const [weekKey, bucket] of weekBuckets) {
+        rows.push({
+          type: "week",
+          key: weekKey,
+          label: bucket.label,
+          count: bucket.rows.length,
+        });
+
+        if (groupByAssignee) {
+          const assigneeBuckets = new Map<
+            string,
+            { label: string; rows: BountyRow[] }
+          >();
+          for (const row of bucket.rows) {
+            const group = getAssigneeGroup(row.bounty);
+            if (!assigneeBuckets.has(group.key)) {
+              assigneeBuckets.set(group.key, { label: group.label, rows: [] });
+            }
+            assigneeBuckets.get(group.key)!.rows.push(row);
+          }
+
+          for (const [assigneeKey, aBucket] of assigneeBuckets) {
+            rows.push({
+              type: "group",
+              key: `${weekKey}::${assigneeKey}`,
+              label: aBucket.label,
+              count: aBucket.rows.length,
+            });
+            for (const row of aBucket.rows) {
+              rows.push({ type: "bounty", ...row });
+            }
+          }
+        } else {
+          for (const row of bucket.rows) {
+            rows.push({ type: "bounty", ...row });
+          }
+        }
+      }
+
+      return rows;
+    }
+
+    // Assignee-only grouping (no week grouping).
+    const sorted = [...bountyRows].sort(assigneeCompare);
+
+    const counts = new Map<string, number>();
+    for (const row of sorted) {
+      const key = getAssigneeGroup(row.bounty).key;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+
+    const rows: BountyTableRow[] = [];
+    let lastKey: string | null = null;
+    for (const row of sorted) {
+      const group = getAssigneeGroup(row.bounty);
+      if (group.key !== lastKey) {
+        rows.push({
+          type: "group",
+          key: group.key,
+          label: group.label,
+          count: counts.get(group.key) ?? 0,
+        });
+        lastKey = group.key;
+      }
+      rows.push({ type: "bounty", ...row });
+    }
+    return rows;
+  }, [bountyRows, groupByAssignee, groupByWeek]);
+
+  const groupIndentClass = groupByWeek ? "pl-8 sm:pl-10" : "pl-4 sm:pl-6";
 
   const activeCategoryLabel =
     categoryFilter === "ALL" ? "All Categories" : categoryFilter;
   const activeFilterCount =
     (bountyStatusFilter !== "ALL" ? 1 : 0) +
     (categoryFilter !== "ALL" ? 1 : 0) +
+    (repoFilter !== "all" ? 1 : 0) +
     (showCancelledBounties ? 1 : 0);
 
   const statusCountFor = (status: BountyStatus | "ALL") =>
@@ -320,7 +801,18 @@ export default function AdminDashboard() {
   const resetFilters = () => {
     setBountyStatusFilter("ALL");
     setCategoryFilter("ALL");
+    setRepoFilter("all");
     setShowCancelledBounties(false);
+  };
+
+  const handleShowAll = async () => {
+    if (!hasMoreBounties || loadingAll) return;
+    setLoadingAll(true);
+    try {
+      await loadAllBounties();
+    } finally {
+      setLoadingAll(false);
+    }
   };
 
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
@@ -361,9 +853,9 @@ export default function AdminDashboard() {
     if (assigneeCount === 0) {
       const createdByUser = bounty.createdByUser;
       const hasLegacyAssignee = !!bounty.assigneeUser;
-      const createdByClient = createdByUser?.role === "CLIENT";
+      const createdByHunter = createdByUser?.role === "HUNTER";
 
-      if (hasLegacyAssignee && createdByClient) {
+      if (hasLegacyAssignee && createdByHunter) {
         try {
           await updateBountyStatus(bountyId, "DONE");
         } catch (err) {
@@ -510,7 +1002,7 @@ export default function AdminDashboard() {
 
   const totalRewards = totalBountyAmount;
   const activeBountiesAmount = totalActiveCount;
-  const totalHunters = nonAdminUsers.filter((u) => u.role === "CLIENT").length;
+  const totalHunters = nonAdminUsers.filter((u) => u.role === "HUNTER").length;
   const completedBounties = bounties.filter(
     (b) => b.status === "DONE" && !b.isPaid,
   );
@@ -543,17 +1035,74 @@ export default function AdminDashboard() {
   return (
     <ProtectedRoute>
       <main className="min-h-screen bg-background">
-        <AdminNavbar isAdmin={true} />
+        <AdminNavbar
+          isAdmin={true}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+        />
+
+        {searchQuery.trim().length >= 2 && (
+          <div className="imd:container mx-auto max-w-7xl px-4 pt-4">
+            <div className="rounded-xl border bg-card/40 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+                  People
+                </h3>
+                <span className="text-[11px] text-muted-foreground">
+                  {peopleLoading
+                    ? "searching…"
+                    : `${people.length} match${people.length === 1 ? "" : "es"}`}
+                </span>
+              </div>
+              {people.length === 0 && !peopleLoading ? (
+                <p className="text-sm text-muted-foreground">
+                  No profiles for “{searchQuery.trim()}”. Matching bounties stay
+                  in the table below.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {people.map((user) => (
+                    <Link
+                      key={user.id}
+                      href={profileHref(user)}
+                      className="inline-flex items-center gap-2 rounded-full border bg-background px-2.5 py-1 text-sm hover:border-primary/50 hover:bg-muted/60"
+                      title="Open profile"
+                    >
+                      <Avatar className="h-6 w-6 border">
+                        <AvatarImage src={user.avatar || undefined} />
+                        <AvatarFallback className="text-[10px]">
+                          {(user.nickname || user.name || "?").charAt(0)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="font-medium">
+                        {user.nickname || user.name || "User"}
+                      </span>
+                      {user.nickname &&
+                        user.name &&
+                        user.name !== user.nickname && (
+                          <span className="text-xs text-muted-foreground">
+                            {user.name}
+                          </span>
+                        )}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ---------------------------------------------------------- */}
         {/* Sticky command bar: identity + environment + primary action */}
         {/* ---------------------------------------------------------- */}
         <div className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="imd:container mx-auto max-w-7xl px-4 pt-8">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-12 py-3">
+          <div className="imd:container mx-auto max-w-7xl px-4 pt-4 sm:pt-8">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6 sm:mb-12 py-3">
               <div className="min-w-0">
-                <h1 className="text-3xl font-extrabold">Admin Console</h1>
-                <p className="text-muted-foreground">
+                <h1 className="text-2xl sm:text-3xl font-extrabold">
+                  Admin Console
+                </h1>
+                <p className="text-sm text-muted-foreground">
                   Platform-wide overview and management
                 </p>
               </div>
@@ -732,7 +1281,7 @@ export default function AdminDashboard() {
                         </Button>
 
                         {filtersOpen && (
-                          <div className="absolute right-0 z-20 mt-2 w-64 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg">
+                          <div className="absolute right-0 z-20 mt-2 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg">
                             <p className="mb-1.5 px-1 text-xs text-muted-foreground">
                               Category
                             </p>
@@ -814,434 +1363,605 @@ export default function AdminDashboard() {
                       );
                     })}
                   </div>
+                  <div className="pt-2">
+                    <RepoFilter
+                      value={repoFilter}
+                      onChange={setRepoFilter}
+                      counts={repoCounts}
+                    />
+                  </div>
+                  {hasMoreBounties && (
+                    <div className="pt-2 flex justify-end">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleShowAll}
+                        disabled={loadingAll || bountiesLoading}
+                        className="gap-2"
+                      >
+                        {(loadingAll || bountiesLoading) && (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        )}
+                        Show all bounties
+                      </Button>
+                    </div>
+                  )}
                 </CardHeader>
 
                 <CardContent className="p-0">
-                  <Table>
-                    <TableHeader className="sticky top-[0px] z-10 bg-muted/50 backdrop-blur">
-                      <TableRow>
-                        <TableHead className="py-3 pl-4 sm:pl-6">
-                          Bounty
-                        </TableHead>
-                        <TableHead className="hidden sm:table-cell">
-                          Status
-                        </TableHead>
-                        <TableHead className="hidden md:table-cell">
-                          Category
-                        </TableHead>
-                        <TableHead className="hidden lg:table-cell">
-                          Assignee
-                        </TableHead>
-                        <TableHead className="hidden lg:table-cell">
-                          Activity
-                        </TableHead>
-                        <TableHead className="hidden sm:table-cell text-right">
-                          Reward
-                        </TableHead>
-                        <TableHead className="w-12 pr-4 text-right sm:pr-6">
-                          <span className="sr-only">Actions</span>
-                        </TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredBounties.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={7} className="py-16">
-                            <div className="flex flex-col items-center text-center">
-                              <FileText className="mb-3 h-9 w-9 text-muted-foreground/40" />
-                              <p className="text-sm text-muted-foreground">
-                                No bounties match these filters.
-                              </p>
-                              <div className="mt-4 flex gap-2">
-                                {activeFilterCount > 0 && (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={resetFilters}
-                                  >
-                                    Clear filters
-                                  </Button>
-                                )}
-                                <Button
-                                  size="sm"
-                                  className="gap-2"
-                                  onClick={() => setShowAdminBountyModal(true)}
-                                >
-                                  <Plus className="h-3.5 w-3.5" /> New Bounty
-                                </Button>
-                              </div>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        filteredBounties.map((bounty) => {
-                          const applications = getAllApplicationsForBounty(
-                            bounty.id,
-                          );
-                          const appCount = applications?.length || 0;
-                          const pendingApps =
-                            applications?.filter((a) => a.status === "pending")
-                              .length || 0;
-
-                          const submissions = allSubmissions.filter(
-                            (s) => s.bountyId === bounty.id,
-                          );
-                          const submissionCount = submissions.length;
-                          const pendingSubs = submissions.filter(
-                            (s) => s.status === "pending",
-                          ).length;
-
-                          return (
-                            <TableRow
-                              key={bounty.id}
-                              className="transition-colors hover:bg-muted/30"
+                  {/* ============================================== */}
+                  {/* Mobile: stacked cards (below sm)                */}
+                  {/* ============================================== */}
+                  <div className="sm:hidden divide-y divide-border">
+                    {bountyRows.length === 0 ? (
+                      <div className="flex flex-col items-center px-4 py-16 text-center">
+                        <FileText className="mb-3 h-9 w-9 text-muted-foreground/40" />
+                        <p className="text-sm text-muted-foreground">
+                          No bounties match these filters.
+                        </p>
+                        <div className="mt-4 flex gap-2">
+                          {activeFilterCount > 0 && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={resetFilters}
                             >
-                              {/* Title + creator + mobile meta */}
-                              <TableCell className="max-w-[180px] py-3 pl-4 font-medium sm:max-w-[240px] sm:pl-6 imd:max-w-[400px]">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Avatar className="h-7 w-7 flex-shrink-0 border">
+                              Clear filters
+                            </Button>
+                          )}
+                          <Button
+                            size="sm"
+                            className="gap-2"
+                            onClick={() => setShowAdminBountyModal(true)}
+                          >
+                            <Plus className="h-3.5 w-3.5" /> New Bounty
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      bountyRows.map(
+                        ({
+                          bounty,
+                          appCount,
+                          pendingApps,
+                          submissionCount,
+                          pendingSubs,
+                        }) => (
+                          <div key={bounty.id} className="px-4 py-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <button
+                                className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                                onClick={() => setEditingBounty(bounty)}
+                              >
+                                <Avatar className="mt-0.5 h-8 w-8 flex-shrink-0 border">
+                                  <AvatarImage
+                                    src={
+                                      bounty.createdByUser?.avatar ||
+                                      "/placeholder-user.jpg"
+                                    }
+                                  />
+                                  <AvatarFallback>
+                                    {displayName(bounty.createdByUser)[0]}
+                                  </AvatarFallback>
+                                </Avatar>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-sm font-medium leading-tight">
+                                    {bounty.title}
+                                  </p>
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                    <BountyRepoMark bounty={bounty} />
+                                    <span className="flex items-center gap-1">
+                                      <StatusDot
+                                        status={bounty.status}
+                                        className="h-1.5 w-1.5"
+                                      />
+                                      <span className="text-[11px] text-muted-foreground">
+                                        {formatStatus(bounty.status)}
+                                      </span>
+                                    </span>
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[9px] font-bold uppercase tracking-tight"
+                                    >
+                                      {bounty.categoryId}
+                                    </Badge>
+                                    <span className="font-mono text-[11px] text-muted-foreground">
+                                      {bounty.bountyAmount} ZEC
+                                    </span>
+                                  </div>
+                                  {(pendingApps > 0 || pendingSubs > 0) && (
+                                    <p className="mt-1 text-[11px] font-medium text-yellow-700 dark:text-yellow-400">
+                                      {pendingApps + pendingSubs} pending action
+                                      {pendingApps + pendingSubs !== 1
+                                        ? "s"
+                                        : ""}
+                                    </p>
+                                  )}
+                                </div>
+                              </button>
+
+                              <BountyActionsMenu
+                                bounty={bounty}
+                                pendingApps={pendingApps}
+                                pendingSubs={pendingSubs}
+                                onView={() => setViewingBounty(bounty)}
+                                onEdit={() => setEditingBounty(bounty)}
+                                onStatusChange={(status) =>
+                                  handleStatusChange(bounty.id, status)
+                                }
+                                onApprovalChange={(approved) =>
+                                  handleApprovalChange(bounty.id, approved)
+                                }
+                                onViewApplications={() => {
+                                  setSelectedBounty(bounty.id);
+                                  setIsManagingApplications(true);
+                                  fetchBountyApplications(bounty.id);
+                                }}
+                                onViewSubmissions={() => {
+                                  setSelectedBounty(bounty.id);
+                                  setIsManagingSubmissions(true);
+                                }}
+                                onCancel={() =>
+                                  handleStatusChange(bounty.id, "CANCELLED")
+                                }
+                              />
+                            </div>
+
+                            <div className="mt-2.5 flex items-center gap-1.5 pl-[42px]">
+                              {bounty.assignees &&
+                              bounty.assignees.length > 0 ? (
+                                <button
+                                  className="flex items-center gap-1.5"
+                                  onClick={() =>
+                                    setAssigneeSectionBounty(bounty)
+                                  }
+                                >
+                                  <div className="flex items-center">
+                                    {bounty.assignees
+                                      .slice(0, 3)
+                                      .map((a, i) => (
+                                        <Avatar
+                                          key={a.userId}
+                                          className="h-5 w-5 border-2 border-background"
+                                          style={{
+                                            marginLeft: i === 0 ? 0 : "-6px",
+                                            zIndex: 3 - i,
+                                          }}
+                                        >
                                           <AvatarImage
                                             src={
-                                              bounty.createdByUser?.avatar ||
+                                              a.user?.avatar ||
                                               "/placeholder-user.jpg"
                                             }
                                           />
-                                          <AvatarFallback>
-                                            {
-                                              displayName(
-                                                bounty.createdByUser,
-                                              )[0]
-                                            }
+                                          <AvatarFallback className="text-[8px]">
+                                            {displayName(a.user)[0]}
                                           </AvatarFallback>
                                         </Avatar>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        Created by{" "}
-                                        {displayName(bounty.createdByUser)}
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </TooltipProvider>
-                                  <div className="min-w-0 flex-1">
-                                    <button
-                                      className="block w-full truncate text-left text-sm font-medium transition-colors hover:text-primary hover:underline"
-                                      onClick={() => setEditingBounty(bounty)}
+                                      ))}
+                                  </div>
+                                  <span className="text-[11px] font-medium text-muted-foreground">
+                                    {bounty.assignees.length === 1
+                                      ? displayName(bounty.assignees[0].user)
+                                      : `${bounty.assignees.length} assignees`}
+                                  </span>
+                                </button>
+                              ) : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 gap-1 border border-dashed px-2 text-[10px]"
+                                  onClick={() =>
+                                    setAssigneeSectionBounty(bounty)
+                                  }
+                                >
+                                  <UserPlus className="h-3 w-3" /> Assign
+                                </Button>
+                              )}
+
+                              <span className="text-muted-foreground/40">
+                                ·
+                              </span>
+
+                              <CountPill
+                                count={appCount}
+                                pending={pendingApps}
+                                icon={Users}
+                                onClick={() => {
+                                  setSelectedBounty(bounty.id);
+                                  setIsManagingApplications(true);
+                                  fetchBountyApplications(bounty.id);
+                                }}
+                              />
+                              <CountPill
+                                count={submissionCount}
+                                pending={pendingSubs}
+                                icon={Upload}
+                                onClick={() => {
+                                  setSelectedBounty(bounty.id);
+                                  setIsManagingSubmissions(true);
+                                }}
+                              />
+                            </div>
+                          </div>
+                        ),
+                      )
+                    )}
+                  </div>
+
+                  {/* ============================================== */}
+                  {/* Desktop: table (sm and up)                      */}
+                  {/* ============================================== */}
+                  <div className="hidden sm:block">
+                    <Table>
+                      <TableHeader className="sticky top-[0px] z-10 bg-muted/50 backdrop-blur">
+                        <TableRow>
+                          <TableHead className="py-3 pl-4 sm:pl-6">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <label className="inline-flex cursor-pointer select-none items-center gap-2">
+                                    <Checkbox
+                                      checked={groupByWeek}
+                                      onCheckedChange={(value) =>
+                                        setGroupByWeek(value === true)
+                                      }
+                                      aria-label="Group by week"
+                                    />
+                                    Bounty
+                                  </label>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Group bounties by the week they were created
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </TableHead>
+                          <TableHead className="hidden sm:table-cell">
+                            Status
+                          </TableHead>
+                          <TableHead className="hidden md:table-cell">
+                            Category
+                          </TableHead>
+                          <TableHead className="hidden lg:table-cell">
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <label className="inline-flex cursor-pointer select-none items-center gap-2">
+                                    <Checkbox
+                                      checked={groupByAssignee}
+                                      onCheckedChange={(value) =>
+                                        setGroupByAssignee(value === true)
+                                      }
+                                      aria-label="Group by assignee"
+                                    />
+                                    Assignee
+                                  </label>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  Group identical assignees and show open counts
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </TableHead>
+                          <TableHead className="hidden lg:table-cell">
+                            Activity
+                          </TableHead>
+                          <TableHead className="hidden sm:table-cell text-right">
+                            Reward
+                          </TableHead>
+                          <TableHead className="w-12 pr-4 text-right sm:pr-6">
+                            <span className="sr-only">Actions</span>
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {bountyRows.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="py-16">
+                              <div className="flex flex-col items-center text-center">
+                                <FileText className="mb-3 h-9 w-9 text-muted-foreground/40" />
+                                <p className="text-sm text-muted-foreground">
+                                  No bounties match these filters.
+                                </p>
+                                <div className="mt-4 flex gap-2">
+                                  {activeFilterCount > 0 && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={resetFilters}
                                     >
-                                      {bounty.title}
-                                    </button>
-                                    <div className="mt-1 flex flex-wrap items-center gap-2 sm:hidden">
-                                      <span className="flex items-center gap-1">
-                                        <StatusDot
-                                          status={bounty.status}
-                                          className="h-1.5 w-1.5"
-                                        />
-                                        <span className="text-[11px] text-muted-foreground">
-                                          {formatStatus(bounty.status)}
-                                        </span>
-                                      </span>
-                                      <span className="text-[11px] text-muted-foreground">
-                                        ·
-                                      </span>
-                                      <span className="font-mono text-[11px] text-muted-foreground">
-                                        {bounty.bountyAmount} ZEC
-                                      </span>
-                                      {(pendingApps > 0 || pendingSubs > 0) && (
-                                        <span className="text-[11px] text-yellow-700 dark:text-yellow-400">
-                                          {pendingApps + pendingSubs} pending
-                                        </span>
-                                      )}
+                                      Clear filters
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    className="gap-2"
+                                    onClick={() =>
+                                      setShowAdminBountyModal(true)
+                                    }
+                                  >
+                                    <Plus className="h-3.5 w-3.5" /> New Bounty
+                                  </Button>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          bountyTableRows.map((row) => {
+                            if (row.type === "week") {
+                              return (
+                                <TableRow
+                                  key={`week-${row.key}`}
+                                  className="hover:bg-transparent"
+                                >
+                                  <TableCell
+                                    colSpan={7}
+                                    className="bg-muted/60 py-2 pl-4 text-xs font-semibold text-foreground sm:pl-6"
+                                  >
+                                    {row.label}
+                                    <span className="ml-2 tabular-nums font-normal text-muted-foreground opacity-70">
+                                      {row.count}{" "}
+                                      {row.count === 1 ? "bounty" : "bounties"}
+                                    </span>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            }
+
+                            if (row.type === "group") {
+                              return (
+                                <TableRow
+                                  key={`group-${row.key}`}
+                                  className="hover:bg-transparent"
+                                >
+                                  <TableCell
+                                    colSpan={7}
+                                    className={`bg-muted/40 py-1.5 text-xs font-medium text-muted-foreground ${groupIndentClass}`}
+                                  >
+                                    <span className="text-foreground">
+                                      {row.label}
+                                    </span>
+                                    <span className="ml-2 tabular-nums opacity-70">
+                                      {row.count} open
+                                    </span>
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            }
+
+                            const {
+                              bounty,
+                              appCount,
+                              pendingApps,
+                              submissionCount,
+                              pendingSubs,
+                            } = row;
+
+                            return (
+                              <TableRow
+                                key={bounty.id}
+                                className="transition-colors hover:bg-muted/30"
+                              >
+                                {/* Title + creator + mobile meta */}
+                                <TableCell className="max-w-[180px] py-3 pl-4 font-medium sm:max-w-[240px] sm:pl-6 imd:max-w-[400px]">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <ProfileLink
+                                      user={bounty.createdByUser}
+                                      className="inline-flex"
+                                    >
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <Avatar className="h-7 w-7 flex-shrink-0 border">
+                                              <AvatarImage
+                                                src={
+                                                  bounty.createdByUser
+                                                    ?.avatar ||
+                                                  "/placeholder-user.jpg"
+                                                }
+                                              />
+                                              <AvatarFallback>
+                                                {
+                                                  displayName(
+                                                    bounty.createdByUser,
+                                                  )[0]
+                                                }
+                                              </AvatarFallback>
+                                            </Avatar>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            Created by{" "}
+                                            {displayName(bounty.createdByUser)}
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    </ProfileLink>
+                                    <div className="min-w-0 flex-1">
+                                      {/* Clicking the title opens the edit
+                                          form directly. */}
+                                      <button
+                                        className="block w-full truncate text-left text-sm font-medium transition-colors hover:text-primary hover:underline"
+                                        onClick={() => setEditingBounty(bounty)}
+                                      >
+                                        {bounty.title}
+                                      </button>
+                                      <BountyRepoMark bounty={bounty} />
                                     </div>
                                   </div>
-                                </div>
-                              </TableCell>
+                                </TableCell>
 
-                              {/* Status moved next to title for scannability */}
-                              <TableCell className="hidden sm:table-cell">
-                                <div className="flex items-center gap-2">
-                                  <StatusDot
-                                    status={bounty.status}
-                                    className="h-2 w-2"
-                                  />
-                                  <span className="text-sm capitalize">
-                                    {formatStatus(bounty.status)}
-                                  </span>
-                                </div>
-                              </TableCell>
+                                {/* Status moved next to title for scannability */}
+                                <TableCell className="hidden sm:table-cell">
+                                  <div className="flex items-center gap-2">
+                                    <StatusDot
+                                      status={bounty.status}
+                                      className="h-2 w-2"
+                                    />
+                                    <span className="text-sm capitalize">
+                                      {formatStatus(bounty.status)}
+                                    </span>
+                                  </div>
+                                </TableCell>
 
-                              <TableCell className="hidden md:table-cell">
-                                <Badge
-                                  variant="outline"
-                                  className="text-[10px] font-bold uppercase tracking-tight"
-                                >
-                                  {bounty.categoryId}
-                                </Badge>
-                              </TableCell>
-
-                              <TableCell className="hidden lg:table-cell">
-                                {bounty.assignees &&
-                                bounty.assignees.length > 0 ? (
-                                  <button
-                                    className="flex items-center gap-2 transition-opacity hover:opacity-75"
-                                    onClick={() =>
-                                      setAssigneeSectionBounty(bounty)
-                                    }
+                                <TableCell className="hidden md:table-cell">
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] font-bold uppercase tracking-tight"
                                   >
-                                    <div className="flex items-center">
-                                      {bounty.assignees
-                                        .slice(0, 3)
-                                        .map((a, i) => (
-                                          <Avatar
-                                            key={a.userId}
-                                            className="h-6 w-6 border-2 border-background"
-                                            style={{
-                                              marginLeft: i === 0 ? 0 : "-8px",
-                                              zIndex: 3 - i,
-                                            }}
+                                    {bounty.categoryId}
+                                  </Badge>
+                                </TableCell>
+
+                                <TableCell className="hidden lg:table-cell">
+                                  {bounty.assignees &&
+                                  bounty.assignees.length > 0 ? (
+                                    <button
+                                      className="flex items-center gap-2 transition-opacity hover:opacity-75"
+                                      onClick={() =>
+                                        setAssigneeSectionBounty(bounty)
+                                      }
+                                    >
+                                      <div className="flex items-center">
+                                        {bounty.assignees
+                                          .slice(0, 3)
+                                          .map((a, i) => (
+                                            <Avatar
+                                              key={a.userId}
+                                              className="h-6 w-6 border-2 border-background"
+                                              style={{
+                                                marginLeft:
+                                                  i === 0 ? 0 : "-8px",
+                                                zIndex: 3 - i,
+                                              }}
+                                            >
+                                              <AvatarImage
+                                                src={
+                                                  a.user?.avatar ||
+                                                  "/placeholder-user.jpg"
+                                                }
+                                              />
+                                              <AvatarFallback className="text-[9px]">
+                                                {displayName(a.user)[0]}
+                                              </AvatarFallback>
+                                            </Avatar>
+                                          ))}
+                                        {bounty.assignees.length > 3 && (
+                                          <div
+                                            className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-background bg-muted text-[9px] font-bold text-muted-foreground"
+                                            style={{ marginLeft: "-8px" }}
                                           >
-                                            <AvatarImage
-                                              src={
-                                                a.user?.avatar ||
-                                                "/placeholder-user.jpg"
-                                              }
-                                            />
-                                            <AvatarFallback className="text-[9px]">
-                                              {displayName(a.user)[0]}
-                                            </AvatarFallback>
-                                          </Avatar>
-                                        ))}
-                                      {bounty.assignees.length > 3 && (
-                                        <div
-                                          className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-background bg-muted text-[9px] font-bold text-muted-foreground"
-                                          style={{ marginLeft: "-8px" }}
-                                        >
-                                          +{bounty.assignees.length - 3}
-                                        </div>
-                                      )}
-                                    </div>
-                                    <span className="text-xs font-medium">
-                                      {bounty.assignees.length === 1
-                                        ? displayName(bounty.assignees[0].user)
-                                        : `${bounty.assignees.length} assignees`}
-                                    </span>
-                                  </button>
-                                ) : bounty.assignee && bounty.assigneeUser ? (
-                                  <button
-                                    className="flex items-center gap-2 transition-opacity hover:opacity-75"
-                                    onClick={() =>
-                                      setAssigneeSectionBounty(bounty)
-                                    }
-                                  >
-                                    <Avatar className="h-6 w-6 border">
-                                      <AvatarImage
-                                        src={
-                                          bounty.assigneeUser.avatar ||
-                                          "/placeholder-user.jpg"
-                                        }
-                                      />
-                                      <AvatarFallback>
-                                        {displayName(bounty.assigneeUser)[0]}
-                                      </AvatarFallback>
-                                    </Avatar>
-                                    <span className="text-xs font-medium">
-                                      {displayName(bounty.assigneeUser)}
-                                    </span>
-                                  </button>
-                                ) : (
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-7 gap-1 border border-dashed px-2 text-[10px]"
-                                    onClick={() =>
-                                      setAssigneeSectionBounty(bounty)
-                                    }
-                                  >
-                                    <UserPlus className="h-3 w-3" /> Assign
-                                  </Button>
-                                )}
-                              </TableCell>
-
-                              {/* Applications + submissions collapsed into one column */}
-                              <TableCell className="hidden lg:table-cell">
-                                <div className="flex items-center gap-1.5">
-                                  <CountPill
-                                    count={appCount}
-                                    pending={pendingApps}
-                                    icon={Users}
-                                    onClick={() => {
-                                      setSelectedBounty(bounty.id);
-                                      setIsManagingApplications(true);
-                                      fetchBountyApplications(bounty.id);
-                                    }}
-                                  />
-                                  <CountPill
-                                    count={submissionCount}
-                                    pending={pendingSubs}
-                                    icon={Upload}
-                                    onClick={() => {
-                                      setSelectedBounty(bounty.id);
-                                      setIsManagingSubmissions(true);
-                                    }}
-                                  />
-                                </div>
-                              </TableCell>
-
-                              <TableCell className="hidden text-right font-mono text-sm tabular-nums sm:table-cell">
-                                {bounty.bountyAmount} ZEC
-                              </TableCell>
-
-                              <TableCell className="pr-4 text-right sm:pr-6">
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
+                                            +{bounty.assignees.length - 3}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <span className="text-xs font-medium">
+                                        {bounty.assignees.length === 1
+                                          ? displayName(
+                                              bounty.assignees[0].user,
+                                            )
+                                          : `${bounty.assignees.length} assignees`}
+                                      </span>
+                                    </button>
+                                  ) : bounty.assignee && bounty.assigneeUser ? (
+                                    <button
+                                      className="flex items-center gap-2 transition-opacity hover:opacity-75"
+                                      onClick={() =>
+                                        setAssigneeSectionBounty(bounty)
+                                      }
+                                    >
+                                      <Avatar className="h-6 w-6 border">
+                                        <AvatarImage
+                                          src={
+                                            bounty.assigneeUser.avatar ||
+                                            "/placeholder-user.jpg"
+                                          }
+                                        />
+                                        <AvatarFallback>
+                                          {displayName(bounty.assigneeUser)[0]}
+                                        </AvatarFallback>
+                                      </Avatar>
+                                      <span className="text-xs font-medium">
+                                        {displayName(bounty.assigneeUser)}
+                                      </span>
+                                    </button>
+                                  ) : (
                                     <Button
                                       variant="ghost"
-                                      size="icon"
-                                      className="h-8 w-8"
+                                      size="sm"
+                                      className="h-7 gap-1 border border-dashed px-2 text-[10px]"
+                                      onClick={() =>
+                                        setAssigneeSectionBounty(bounty)
+                                      }
                                     >
-                                      <MoreHorizontal className="h-4 w-4" />
+                                      <UserPlus className="h-3 w-3" /> Assign
                                     </Button>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent
-                                    align="end"
-                                    className="w-56"
-                                  >
-                                    <DropdownMenuLabel>
-                                      Change Status
-                                    </DropdownMenuLabel>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleStatusChange(bounty.id, "TO_DO")
-                                      }
-                                    >
-                                      <StatusDot
-                                        status="TO_DO"
-                                        className="mr-2 h-2 w-2"
-                                      />
-                                      Set To Do
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleStatusChange(
-                                          bounty.id,
-                                          "IN_PROGRESS",
-                                        )
-                                      }
-                                    >
-                                      <StatusDot
-                                        status="IN_PROGRESS"
-                                        className="mr-2 h-2 w-2"
-                                      />
-                                      Set In Progress
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleStatusChange(
-                                          bounty.id,
-                                          "IN_REVIEW",
-                                        )
-                                      }
-                                    >
-                                      <StatusDot
-                                        status="IN_REVIEW"
-                                        className="mr-2 h-2 w-2"
-                                      />
-                                      Set In Review
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleStatusChange(bounty.id, "DONE")
-                                      }
-                                    >
-                                      <StatusDot
-                                        status="DONE"
-                                        className="mr-2 h-2 w-2"
-                                      />
-                                      Mark as Done
-                                    </DropdownMenuItem>
+                                  )}
+                                </TableCell>
 
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuLabel>
-                                      Manage
-                                    </DropdownMenuLabel>
-                                    <DropdownMenuItem
+                                {/* Applications + submissions collapsed into one column */}
+                                <TableCell className="hidden lg:table-cell">
+                                  <div className="flex items-center gap-1.5">
+                                    <CountPill
+                                      count={appCount}
+                                      pending={pendingApps}
+                                      icon={Users}
                                       onClick={() => {
                                         setSelectedBounty(bounty.id);
                                         setIsManagingApplications(true);
                                         fetchBountyApplications(bounty.id);
                                       }}
-                                    >
-                                      <Users className="mr-2 h-4 w-4" />
-                                      View Applications
-                                      {pendingApps > 0 && (
-                                        <span className="ml-auto text-[11px] text-muted-foreground">
-                                          {pendingApps}
-                                        </span>
-                                      )}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
+                                    />
+                                    <CountPill
+                                      count={submissionCount}
+                                      pending={pendingSubs}
+                                      icon={Upload}
                                       onClick={() => {
                                         setSelectedBounty(bounty.id);
                                         setIsManagingSubmissions(true);
                                       }}
-                                    >
-                                      <Upload className="mr-2 h-4 w-4" />
-                                      Review Submissions
-                                      {pendingSubs > 0 && (
-                                        <span className="ml-auto text-[11px] text-muted-foreground">
-                                          {pendingSubs}
-                                        </span>
-                                      )}
-                                    </DropdownMenuItem>
+                                    />
+                                  </div>
+                                </TableCell>
 
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuLabel>
-                                      Approval
-                                    </DropdownMenuLabel>
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleApprovalChange(bounty.id, true)
-                                      }
-                                      disabled={bounty.isApproved}
-                                    >
-                                      <CheckCircle2 className="mr-2 h-4 w-4" />
-                                      Approve Bounty
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleApprovalChange(bounty.id, false)
-                                      }
-                                      disabled={!bounty.isApproved}
-                                      className="text-destructive"
-                                    >
-                                      <AlertTriangle className="mr-2 h-4 w-4" />
-                                      Reject Bounty
-                                    </DropdownMenuItem>
+                                <TableCell className="hidden text-right font-mono text-sm tabular-nums sm:table-cell">
+                                  {bounty.bountyAmount} ZEC
+                                </TableCell>
 
-                                    {/* Destructive action isolated at the bottom */}
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        handleStatusChange(
-                                          bounty.id,
-                                          "CANCELLED",
-                                        )
-                                      }
-                                      className="text-destructive"
-                                    >
-                                      <XCircle className="mr-2 h-4 w-4" />
-                                      Cancel Bounty
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
+                                <TableCell className="pr-4 text-right sm:pr-6">
+                                  <BountyActionsMenu
+                                    bounty={bounty}
+                                    pendingApps={pendingApps}
+                                    pendingSubs={pendingSubs}
+                                    onView={() => setViewingBounty(bounty)}
+                                    onEdit={() => setEditingBounty(bounty)}
+                                    onStatusChange={(status) =>
+                                      handleStatusChange(bounty.id, status)
+                                    }
+                                    onApprovalChange={(approved) =>
+                                      handleApprovalChange(bounty.id, approved)
+                                    }
+                                    onViewApplications={() => {
+                                      setSelectedBounty(bounty.id);
+                                      setIsManagingApplications(true);
+                                      fetchBountyApplications(bounty.id);
+                                    }}
+                                    onViewSubmissions={() => {
+                                      setSelectedBounty(bounty.id);
+                                      setIsManagingSubmissions(true);
+                                    }}
+                                    onCancel={() =>
+                                      handleStatusChange(bounty.id, "CANCELLED")
+                                    }
+                                  />
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
 
                   {hasMoreBounties && (
                     <div
@@ -1403,6 +2123,16 @@ export default function AdminDashboard() {
             </div>
           )}
         </div>
+
+        {/* Read-only detail view — still reachable via "View Details" in
+            the actions menu, but no longer the default click target. */}
+        <BountyDetailModal
+          bounty={viewingBounty}
+          open={!!viewingBounty}
+          onOpenChange={(open) => {
+            if (!open) setViewingBounty(null);
+          }}
+        />
 
         <EditBountyModal
           bounty={editingBounty}
@@ -1646,17 +2376,18 @@ export default function AdminDashboard() {
                       {submission.description}
                     </p>
 
-                    {submission.deliverableUrl && (
+                    {parseLinks(submission.deliverableUrl).map((link) => (
                       <a
-                        href={submission.deliverableUrl}
+                        key={link}
+                        href={link}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="ml-[14px] flex items-center gap-1.5 break-all pl-[42px] text-xs text-blue-600 hover:underline dark:text-blue-400"
                       >
                         <ExternalLink className="h-3 w-3 flex-shrink-0" />
-                        {submission.deliverableUrl}
+                        {link}
                       </a>
-                    )}
+                    ))}
 
                     {submission.reviewNotes && (
                       <div className="ml-[14px] rounded border border-yellow-200 bg-yellow-50 p-2.5 pl-[42px] text-xs text-yellow-800 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
@@ -1684,7 +2415,7 @@ export default function AdminDashboard() {
                             rows={2}
                           />
                         </div>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col gap-2 sm:flex-row">
                           <Button
                             size="sm"
                             onClick={() => {
