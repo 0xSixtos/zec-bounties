@@ -114,6 +114,7 @@ function fixture(status = "IN_PROGRESS", submissionStatus = "pending") {
     "../utils/discord/discordAssignWebhook": {},
     "../utils/constants": {},
     "../helpers/validateBounty": {},
+    "../utils/bountySuggestionReview": require("../utils/bountySuggestionReview"),
     "../utils/userSelects": require("../utils/userSelects"),
     "../utils/userIdentity": {},
     "../utils/bountyActivity": {
@@ -168,12 +169,16 @@ for (const scenario of [
     const result = await api.request(scenario.method, scenario.path, scenario.input, scenario.role);
     const updatedBounty = result.bounty ?? result;
     assert.equal(updatedBounty.status, scenario.expected);
+    assert.equal(updatedBounty.createdByUser.role, "HUNTER", "retain the creator role used by suggested-task badges");
     assert.equal(api.readBounty().status, scenario.expected, "a cached bounty read must return the new status");
     const invalidateIndex = api.trace.findIndex(e => e.invalidated === "bounty:bounty");
     const eventIndex = api.trace.findIndex(e => e.type);
     assert.ok(invalidateIndex >= 0 && invalidateIndex < eventIndex, "invalidate bounty caches before any event can trigger a read");
     const bountyEvents = api.trace.filter(e => e.type && e.type !== "bounty_activity");
     assert.ok(bountyEvents.length > 0);
+    const bountyUpdate = bountyEvents.find(e => ["bounty_updated", "bounty_status_changed"].includes(e.type));
+    assert.ok(bountyUpdate, "broadcast the updated bounty to connected viewers");
+    assert.equal(bountyUpdate.payload.createdByUser.role, "HUNTER", "retain the creator role in live updates");
     for (const event of bountyEvents) {
       assert.equal(event.bountyId, "bounty", "use audience-scoped broadcasts for every bounty event");
       assert.equal(event.excludeUserId, scenario.role === "HUNTER" ? "hunter" : "admin");

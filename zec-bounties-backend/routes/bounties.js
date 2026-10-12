@@ -28,6 +28,7 @@ const {
   validateBountyUpdate,
   validateCategory,
 } = require("../helpers/validateBounty");
+const { buildSuggestionReviewUpdate } = require("../utils/bountySuggestionReview");
 const {
   USER_SELECT,
   USER_SELECT_PUBLIC,
@@ -144,10 +145,10 @@ async function canManageBounty(bounty, user) {
 // status transitions or free assignee-roster edits bypass the apply →
 // accept → submit → review pipeline entirely. Only global admins and the
 // bounty's own team OWNER/ADMIN get that.
-async function canAdministerBounty(bounty, user) {
+async function canAdministerBounty(bounty, user, db = prisma) {
   if (user.role === "ADMIN") return true;
   if (bounty.teamId) {
-    const member = await prisma.teamMember.findUnique({
+    const member = await db.teamMember.findUnique({
       where: { teamId_userId: { teamId: bounty.teamId, userId: user.id } },
     });
     if (member && ["OWNER", "ADMIN"].includes(member.role)) return true;
@@ -261,6 +262,10 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
       return res.status(400).json({ error: "Invalid chain value" });
     }
 
+    // If a teamId was given, confirm it exists. Hunters submit suggestions
+    // without team membership; other non-admin creators must be members. `team` is
+    // declared here (not with `const` inside the `if`) so it's still in
+    // scope below when we denormalize its privacy flag onto the bounty.
     let team = null;
     if (teamId) {
       team = await prisma.team.findUnique({ where: { id: teamId } });
@@ -270,7 +275,8 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
           error: `${team.name} must be verified by ${REQUIRED_TEAM_VERIFICATIONS} admins before it can post bounties`,
         });
       }
-      if (req.user.role !== "ADMIN") {
+
+      if (!["ADMIN", "HUNTER"].includes(req.user.role)) {
         const membership = await prisma.teamMember.findUnique({
           where: { teamId_userId: { teamId, userId: req.user.id } },
         });
@@ -288,6 +294,11 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         ? assignee
         : null;
 
+    // Non-admins stay unapproved until review. Hunter suggestions are
+    // unapproved even when aimed at a team.
+    const resolvedIsApproved =
+      req.user.role === "ADMIN" || (team !== null && !isHunter);
+
     const bounty = await createBountyWithQuota(req.user, {
       data: {
         title,
@@ -296,7 +307,8 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         timeToComplete: new Date(timeToComplete),
         createdBy: req.user.id,
         assignee: resolvedAssignee,
-        isApproved: req.user.role === "ADMIN" || team !== null,
+        isApproved: resolvedIsApproved,
+        ...(isHunter && teamId && { suggestionReviewStatus: "PENDING" }),
         categoryId: categoryId || null,
         ...(chain && { chain }),
         ...(teamId && { teamId }),
@@ -307,11 +319,11 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         }),
       },
       include: {
-        createdByUser: { select: USER_SELECT_WITH_ROLE },
-        assignees: { include: { user: { select: USER_SELECT } } },
-        assigneeUser: { select: USER_SELECT_FULL },
-        team: { select: { id: true, name: true, logo: true } },
-      },
+  createdByUser: { select: USER_SELECT },
+  assignees: { include: { user: { select: USER_SELECT } } },
+  assigneeUser: { select: USER_SELECT },
+  team: { select: { id: true, name: true, logo: true } },
+},
     });
 
     const recipients = await getBroadcastRecipients(bounty);
@@ -469,6 +481,14 @@ router.get("/", optionalAuthenticate, async (req, res) => {
       ...chainFilter,
       ...visibilityFilter,
       ...userFilter,
+      AND: [
+        {
+          OR: [
+            { suggestionReviewStatus: null },
+            { suggestionReviewStatus: { not: "PENDING" } },
+          ],
+        },
+      ],
     };
 
     // ------------------------------------------------------------
@@ -638,15 +658,19 @@ router.post("/:id/assignees", authenticate, async (req, res) => {
       });
     }
 
-    // Snapshot BEFORE the transaction wipes/recreates the roster
-    const existingAssignees = await prisma.bountyAssignee.findMany({
-      where: { bountyId },
-      include: { user: { select: USER_SELECT_FULL } },
-    });
-    const existingAssigneeIds = new Set(existingAssignees.map((a) => a.userId));
-    const newAssigneeIds = new Set(userIds);
-
-    const [freshBounty, assignees] = await prisma.$transaction(async (tx) => {
+       const [freshBounty, assignees, existingAssignees] = await prisma.$transaction(async (tx) => {
+      // Lock the stable parent before replacing children, including an empty roster.
+      await tx.$queryRaw`
+        SELECT "id" FROM "Bounty" WHERE "id" = ${bountyId} FOR UPDATE
+      `;
+      const currentBounty = await tx.bounty.findUniqueOrThrow({
+        where: { id: bountyId },
+        select: { status: true },
+      });
+      const previousAssignees = await tx.bountyAssignee.findMany({
+        where: { bountyId },
+        include: { user: { select: USER_SELECT_FULL } },
+      });
       await tx.bountyAssignee.deleteMany({ where: { bountyId } });
 
       if (userIds.length === 0) {
@@ -669,7 +693,7 @@ router.post("/:id/assignees", authenticate, async (req, res) => {
           },
           data: { assignee: null },
         });
-        if (["TO_DO", "CANCELLED"].includes(bounty.status)) {
+        if (["TO_DO", "CANCELLED"].includes(currentBounty.status)) {
           await tx.bounty.update({
             where: { id: bountyId },
             data: { status: "IN_PROGRESS", isApproved: true },
@@ -681,7 +705,6 @@ router.post("/:id/assignees", authenticate, async (req, res) => {
         where: { bountyId },
         include: { user: { select: USER_SELECT_FULL } },
       });
-
       const bountyRow = await tx.bounty.findUnique({
         where: { id: bountyId },
         include: {
@@ -690,9 +713,10 @@ router.post("/:id/assignees", authenticate, async (req, res) => {
           createdByUser: { select: USER_SELECT_WITH_ROLE },
         },
       });
-
-      return [bountyRow, created];
+      return [bountyRow, created, previousAssignees];
     });
+    const existingAssigneeIds = new Set(existingAssignees.map((a) => a.userId));
+    const newAssigneeIds = new Set(userIds);
 
     await broadcastBountyEvent(
       "bounty_assignees_updated",
@@ -977,6 +1001,87 @@ router.patch("/:id/approve", authenticate, isAdmin, async (req, res) => {
   }
 });
 
+router.patch("/:id/suggestion-review", authenticate, async (req, res) => {
+  try {
+    const bounty = await prisma.bounty.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true,
+        teamId: true,
+        status: true,
+        suggestionReviewStatus: true,
+      },
+    });
+    if (!bounty) return res.status(404).json({ error: "Bounty not found" });
+    if (!bounty.teamId) {
+      return res
+        .status(400)
+        .json({ error: "Only team bounty suggestions can be reviewed" });
+    }
+    if (!(await canAdministerBounty(bounty, req.user))) {
+      return res.status(403).json({ error: "Team admin access required" });
+    }
+    if (bounty.suggestionReviewStatus !== "PENDING") {
+      return res.status(409).json({ error: "Suggestion is no longer pending" });
+    }
+
+    let reviewUpdate;
+    try {
+      reviewUpdate = buildSuggestionReviewUpdate(req.body);
+    } catch (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    const data = { ...reviewUpdate };
+    if (req.body.action === "edit") {
+      const changes = {};
+      for (const field of ["title", "description", "bountyAmount", "timeToComplete"]) {
+        if (req.body[field] !== undefined) changes[field] = req.body[field];
+      }
+      if (!Object.keys(changes).length) {
+        return res.status(400).json({ error: "Provide at least one bounty field to edit" });
+      }
+
+      const validation = validateBountyUpdate(changes);
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
+      }
+      if (changes.bountyAmount !== undefined) {
+        changes.bountyAmount = Number(changes.bountyAmount);
+      }
+      if (changes.timeToComplete !== undefined) {
+        changes.timeToComplete = new Date(changes.timeToComplete);
+      }
+      Object.assign(data, changes);
+    }
+
+    const updateResult = await prisma.bounty.updateMany({
+      where: { id: bounty.id, suggestionReviewStatus: "PENDING" },
+      data,
+    });
+    if (updateResult.count === 0) {
+      return res.status(409).json({ error: "Suggestion is no longer pending" });
+    }
+
+    const updated = await prisma.bounty.findUnique({
+      where: { id: bounty.id },
+      include: {
+        createdByUser: { select: USER_SELECT },
+        assignees: { include: { user: { select: USER_SELECT } } },
+        assigneeUser: { select: USER_SELECT },
+        team: { select: { id: true, name: true, logo: true } },
+      },
+    });
+
+    await invalidateBounty(bounty.id);
+    sendRealtimeUpdate("bounty_updated", updated, req.user.id);
+    return res.json(updated);
+  } catch (error) {
+    console.error("Failed to review bounty suggestion:", error);
+    return res.status(500).json({ error: "Failed to review bounty suggestion" });
+  }
+});
+
 // ─── Change status (Admin) ────────────────────────────────────────────────────
 // FIX: Collapsed the fetch + update into a single transaction so the DB isn't
 //      hit twice serially for every status change.
@@ -1047,7 +1152,7 @@ router.patch("/:id/status", authenticate, async (req, res) => {
           ...ASSIGNEE_INCLUDE,
           assigneeUser: { select: USER_SELECT },
           createdByUser: {
-            select: USER_SELECT,
+            select: { ...USER_SELECT, role: true },
           },
           team: { select: { id: true, name: true, logo: true } },
         },
@@ -1165,7 +1270,7 @@ router.post("/:id/submit", authenticate, async (req, res) => {
             include: {
               ...ASSIGNEE_INCLUDE,
               createdByUser: {
-                select: USER_SELECT,
+                select: { ...USER_SELECT, role: true },
               },
               assigneeUser: {
                 select: USER_SELECT,
@@ -1361,125 +1466,138 @@ router.patch(
         return res.status(400).json({ error: "Invalid review status" });
       }
 
-      const submission = await prisma.workSubmission.findUnique({
-        where: { id: submissionId },
-        include: {
-          bounty: {
-            select: {
-              id: true,
-              createdBy: true,
-              teamId: true,
-              status: true,
-              assignee: true,
-            },
-          },
-          submitterUser: { select: USER_SELECT_MINIMAL },
-        },
-      });
-      if (!submission)
-        return res.status(404).json({ error: "Submission not found" });
-
-      if (!(await canAdministerBounty(submission.bounty, req.user))) {
-        return res.status(403).json({
-          error: "You do not have permission to review this submission",
-        });
-      }
-
-      let newBountyStatus = submission.bounty.status;
-
-      if (status === "approved") {
-        if (submission.bounty.status !== "DONE") {
-          newBountyStatus = "DONE";
-        }
-      } else if (["rejected", "needs_revision"].includes(status)) {
-        const approvedExists = await prisma.workSubmission.findFirst({
-          where: {
-            bountyId: submission.bounty.id,
-            status: "approved",
-            id: { not: submissionId },
-          },
-          select: { id: true },
-        });
-        if (!approvedExists) newBountyStatus = "IN_PROGRESS";
-      }
-
-      const [updatedSubmission, updatedBounty, activityRow] =
-        await prisma.$transaction(async (tx) => {
-          const updSub = await tx.workSubmission.update({
-            where: { id: submissionId },
-            data: {
-              status,
-              reviewNotes: reviewNotes?.trim() || null,
-              reviewedBy: userId,
-              reviewedAt: new Date(),
-            },
-            include: {
-              submitterUser: { select: USER_SELECT },
-              reviewerUser: { select: USER_SELECT },
-            },
-          });
-
-          if (status === "rejected") {
-            await tx.bountyAssignee.deleteMany({
-              where: {
-                bountyId: submission.bounty.id,
-                userId: submission.submittedBy,
+      // Reviews of different submissions share the parent bounty state. Keep
+      // every decision read in the transaction and retry its complete snapshot
+      // on conflict; retrying only the writes would preserve stale decisions.
+      let result;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          result = await prisma.$transaction(async (tx) => {
+            const submission = await tx.workSubmission.findUnique({
+              where: { id: submissionId },
+              include: {
+                bounty: {
+                  select: {
+                    id: true,
+                    createdBy: true,
+                    teamId: true,
+                    status: true,
+                    assignee: true,
+                  },
+                },
+                submitterUser: { select: USER_SELECT_MINIMAL },
               },
             });
-          }
+            if (!submission)
+              return { statusCode: 404, error: "Submission not found" };
 
-          const updBounty = await tx.bounty.update({
-            where: { id: submission.bounty.id },
-            data: {
-              status: newBountyStatus,
-              ...(status === "approved" &&
-                submission.bounty.status !== "DONE" && {
-                  assignee: submission.submittedBy,
-                  completedAt: new Date(),
-                }),
-              ...(status !== "approved" &&
-                submission.bounty.status === "DONE" &&
-                newBountyStatus !== "DONE" && { completedAt: null }),
-              ...(status === "rejected" &&
-                submission.bounty.assignee === submission.submittedBy && {
-                  assignee: null,
-                }),
-            },
-            include: {
-              ...ASSIGNEE_INCLUDE,
-              createdByUser: { select: USER_SELECT },
-              assigneeUser: { select: USER_SELECT },
-              team: { select: { id: true, name: true, logo: true } },
-            },
-          });
+            if (!(await canAdministerBounty(submission.bounty, req.user, tx))) {
+              return {
+                statusCode: 403,
+                error: "You do not have permission to review this submission",
+              };
+            }
 
-          const activityRow = await logActivity(tx, {
-            bountyId: submission.bounty.id,
-            actorId: userId,
-            type: `SUBMISSION_${status.toUpperCase()}`, // APPROVED | REJECTED | NEEDS_REVISION
-            meta: {
-              submitter:
-                submission.submitterUser?.nickname ||
-                submission.submitterUser?.name,
-              ...(reviewNotes?.trim() && { notes: reviewNotes.trim() }),
-            },
-          });
+            let newBountyStatus = submission.bounty.status;
 
-          return [updSub, updBounty, activityRow];
-        });
+            if (status === "approved") {
+              if (submission.bounty.status !== "DONE") {
+                newBountyStatus = "DONE";
+              }
+            } else if (["rejected", "needs_revision"].includes(status)) {
+              const approvedExists = await tx.workSubmission.findFirst({
+                where: {
+                  bountyId: submission.bounty.id,
+                  status: "approved",
+                  id: { not: submissionId },
+                },
+                select: { id: true },
+              });
+              if (!approvedExists) newBountyStatus = "IN_PROGRESS";
+            }
 
-      await invalidateSubmissions(submission.bounty.id, submission.submittedBy);
-      await invalidateBounty(submission.bounty.id);
+            const updSub = await tx.workSubmission.update({
+              where: { id: submissionId },
+              data: {
+                status,
+                reviewNotes: reviewNotes?.trim() || null,
+                reviewedBy: userId,
+                reviewedAt: new Date(),
+              },
+              include: {
+                submitterUser: { select: USER_SELECT },
+                reviewerUser: { select: USER_SELECT },
+              },
+            });
+
+            if (status === "rejected") {
+              await tx.bountyAssignee.deleteMany({
+                where: {
+                  bountyId: submission.bounty.id,
+                  userId: submission.submittedBy,
+                },
+              });
+            }
+
+            const updBounty = await tx.bounty.update({
+              where: { id: submission.bounty.id },
+              data: {
+                status: newBountyStatus,
+                ...(status === "approved" &&
+                  submission.bounty.status !== "DONE" && {
+                    assignee: submission.submittedBy,
+                    completedAt: new Date(),
+                  }),
+                ...(status !== "approved" &&
+                  submission.bounty.status === "DONE" &&
+                  newBountyStatus !== "DONE" && { completedAt: null }),
+                ...(status === "rejected" &&
+                  submission.bounty.assignee === submission.submittedBy && {
+                    assignee: null,
+                  }),
+              },
+              include: {
+                ...ASSIGNEE_INCLUDE,
+                createdByUser: { select: { ...USER_SELECT, role: true } },
+                assigneeUser: { select: USER_SELECT },
+                team: { select: { id: true, name: true, logo: true } },
+              },
+            });
+            await logActivity(tx, {
+              bountyId: updBounty.id,
+              actorId: userId,
+              type: `SUBMISSION_${status.toUpperCase()}`,
+              meta: {
+                submitter:
+                  updSub.submitterUser?.nickname ||
+                  updSub.submitterUser?.name,
+                ...(reviewNotes?.trim() && { notes: reviewNotes.trim() }),
+              },
+            });
+            return { updatedSubmission: updSub, updatedBounty: updBounty };
+          }, { isolationLevel: "Serializable" });
+          break;
+        } catch (error) {
+          if (error.code !== "P2034" || attempt === 2) throw error;
+        }
+      }
+      if (result.error) {
+        return res.status(result.statusCode).json({ error: result.error });
+      }
+      const { updatedSubmission, updatedBounty } = result;
+
+      await invalidateSubmissions(updatedBounty.id, updatedSubmission.submittedBy);
+      await invalidateBounty(updatedBounty.id);
       await broadcastBountyEvent(
         "submission_reviewed",
         updatedSubmission,
-        submission.bounty.id,
+        updatedBounty.id,
         req.user.id,
       );
       await broadcastBountyEvent(
         "bounty_updated",
         updatedBounty,
-        submission.bounty.id,
+        updatedBounty.id,
         req.user.id,
       );
 
@@ -1592,7 +1710,7 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
           include: {
             ...ASSIGNEE_INCLUDE,
             team: { select: { id: true, name: true, logo: true } },
-            createdByUser: { select: USER_SELECT },
+            createdByUser: { select: { ...USER_SELECT, role: true } },
             assigneeUser: { select: USER_SELECT },
           },
         });
@@ -2276,7 +2394,24 @@ router.delete(
           .status(400)
           .json({ error: "Cannot withdraw a reviewed application" });
 
-      await prisma.bountyApplication.delete({ where: { id: applicationId } });
+      const deleted = await prisma.bountyApplication.deleteMany({
+        where: {
+          id: applicationId,
+          applicantId: req.user.id,
+          status: "pending",
+        },
+      });
+      if (deleted.count === 0) {
+        const current = await prisma.bountyApplication.findUnique({
+          where: { id: applicationId },
+          select: { id: true },
+        });
+        if (!current)
+          return res.status(404).json({ error: "Application not found" });
+        return res
+          .status(400)
+          .json({ error: "Cannot withdraw a reviewed application" });
+      }
       await invalidateApplications(
         application.applicantId,
         application.bountyId,
@@ -2656,6 +2791,10 @@ router.put("/:id", authenticate, async (req, res) => {
       select: {
         createdBy: true,
         teamId: true,
+        status: true,
+        isPaid: true,
+        paymentAuthorized: true,
+        paymentInFlight: true,
         dateCreated: true,
         title: true,
         description: true,
@@ -2673,6 +2812,41 @@ router.put("/:id", authenticate, async (req, res) => {
         .json({ error: "You do not have permission to edit this bounty" });
     }
 
+    // Validate the incoming fields (title/description/amount/deadline). This
+    // validator was imported but never called, so bountyAmount reached the DB
+    // unchecked.
+    const bodyValidation = validateBountyUpdate(req.body);
+    if (!bodyValidation.valid) {
+      return res.status(400).json({ error: bodyValidation.error });
+    }
+
+    // `assignee` and `bountyAmount` decide WHO is paid and HOW MUCH, and the
+    // payout batch reads them live at send time. A plain bounty creator must
+    // not be able to change them — only a global/team admin — and they must be
+    // frozen once a payout is authorised, in flight, or done. Without this a
+    // creator could repoint an approved payout to themselves or inflate the
+    // amount before the batch runs.
+    const editsPayoutFields =
+      req.body.assignee !== undefined || req.body.bountyAmount !== undefined;
+    if (editsPayoutFields) {
+      if (!(await canAdministerBounty(existing, req.user))) {
+        return res.status(403).json({
+          error: "Only admins can change the assignee or reward amount",
+        });
+      }
+      if (
+        existing.isPaid ||
+        existing.paymentInFlight ||
+        existing.paymentAuthorized
+      ) {
+        return res.status(409).json({
+          error:
+            "Assignee and reward cannot be changed once payment is authorised or in progress",
+        });
+      }
+    }
+
+    // Only global admins may reassign a bounty's approval/status via this route
     // HUNTERs: creator only, within 15 min of creation, no team-admin bypass.
     // Global admins and team OWNER/ADMIN are exempt.
     if (req.user.role === "HUNTER") {
