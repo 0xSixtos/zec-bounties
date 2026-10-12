@@ -2397,7 +2397,14 @@ router.put("/:id", authenticate, async (req, res) => {
   try {
     const existing = await prisma.bounty.findUnique({
       where: { id: req.params.id },
-      select: { createdBy: true, teamId: true },
+      select: {
+        createdBy: true,
+        teamId: true,
+        status: true,
+        isPaid: true,
+        paymentAuthorized: true,
+        paymentInFlight: true,
+      },
     });
     if (!existing) return res.status(404).json({ error: "Bounty not found" });
 
@@ -2405,6 +2412,40 @@ router.put("/:id", authenticate, async (req, res) => {
       return res
         .status(403)
         .json({ error: "You do not have permission to edit this bounty" });
+    }
+
+    // Validate the incoming fields (title/description/amount/deadline). This
+    // validator was imported but never called, so bountyAmount reached the DB
+    // unchecked.
+    const bodyValidation = validateBountyUpdate(req.body);
+    if (!bodyValidation.valid) {
+      return res.status(400).json({ error: bodyValidation.error });
+    }
+
+    // `assignee` and `bountyAmount` decide WHO is paid and HOW MUCH, and the
+    // payout batch reads them live at send time. A plain bounty creator must
+    // not be able to change them — only a global/team admin — and they must be
+    // frozen once a payout is authorised, in flight, or done. Without this a
+    // creator could repoint an approved payout to themselves or inflate the
+    // amount before the batch runs.
+    const editsPayoutFields =
+      req.body.assignee !== undefined || req.body.bountyAmount !== undefined;
+    if (editsPayoutFields) {
+      if (!(await canAdministerBounty(existing, req.user))) {
+        return res.status(403).json({
+          error: "Only admins can change the assignee or reward amount",
+        });
+      }
+      if (
+        existing.isPaid ||
+        existing.paymentInFlight ||
+        existing.paymentAuthorized
+      ) {
+        return res.status(409).json({
+          error:
+            "Assignee and reward cannot be changed once payment is authorised or in progress",
+        });
+      }
     }
 
     // Only global admins may reassign a bounty's approval/status via this route
