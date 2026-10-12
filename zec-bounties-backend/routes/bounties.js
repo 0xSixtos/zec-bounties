@@ -245,6 +245,21 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
       targetRepo,
     } = req.body;
 
+    const validation = validateBountyCreate(req.body);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+    const categoryValidation = await validateCategory(prisma, categoryId);
+    if (!categoryValidation.valid) {
+      return res.status(400).json({ error: categoryValidation.error });
+    }
+
+    // Only admins may create a pre-approved bounty. Non-admin callers'
+    // isApproved value is ignored outright, mirroring the guard on PUT /:id.
+    const resolvedIsApproved =
+      req.user.role === "ADMIN"
+        ? isApproved !== undefined
+          ? !!isApproved
+          : true
+        : false;
     const resolvedTargetRepo = resolveTargetRepo(targetRepo);
     if (resolvedTargetRepo === undefined) {
       return res.status(400).json({ error: "Invalid targetRepo" });
@@ -300,6 +315,8 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         timeToComplete: new Date(timeToComplete),
         createdBy: req.user.id,
         assignee: resolvedAssignee,
+        isApproved: resolvedIsApproved,
+        categoryId: categoryId || null,
 
         // Approval is an authorization decision, so it is derived here rather
         // than read from the request body: admins and verified teams post
@@ -2698,6 +2715,13 @@ router.put("/:id", authenticate, async (req, res) => {
       return res.status(403).json({ error: "Cannot reassign team" });
     }
 
+    const validation = validateBountyUpdate(req.body);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+    const categoryValidation = await validateCategory(prisma, req.body.categoryId);
+    if (!categoryValidation.valid) {
+      return res.status(400).json({ error: categoryValidation.error });
+    }
+
     const { notifyUsers = false } = req.body;
 
     let resolvedIsPrivate;
@@ -2762,8 +2786,12 @@ router.put("/:id", authenticate, async (req, res) => {
       data: {
         ...(req.body.title && { title: req.body.title }),
         ...(req.body.description && { description: req.body.description }),
-        ...(bountyAmount !== undefined && { bountyAmount }),
-        ...(timeToComplete && { timeToComplete }),
+        ...(req.body.bountyAmount !== undefined && {
+          bountyAmount: Number(req.body.bountyAmount),
+        }),
+        ...(req.body.timeToComplete && {
+          timeToComplete: new Date(req.body.timeToComplete),
+        }),
         ...(req.body.assignee !== undefined && { assignee: req.body.assignee }),
         ...(req.body.chain !== undefined && { chain: req.body.chain }),
         ...(req.body.isApproved !== undefined && {

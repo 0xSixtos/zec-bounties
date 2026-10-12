@@ -34,6 +34,7 @@ const executeZingoCliSync = require("../utils/zingo/zingoLibSync");
 const { randomUUID } = require("crypto");
 const { uploadToPinata, pinataUrl } = require("../utils/ipfs/pinata");
 const { REQUIRED_TEAM_VERIFICATIONS } = require("../utils/constants");
+const { validateBountyCreate, validateCategory } = require("../helpers/validateBounty");
 const {
   USER_SELECT,
   USER_SELECT_PUBLIC,
@@ -770,6 +771,16 @@ router.post(
         });
       }
 
+    const validation = validateBountyCreate(req.body);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+    const categoryValidation = await validateCategory(prisma, categoryId);
+    if (!categoryValidation.valid) {
+      return res.status(400).json({ error: categoryValidation.error });
+    }
+
+    if (chain && !["MAIN", "TEST"].includes(chain)) {
+      return res.status(400).json({ error: "Invalid chain value" });
+    }
       if (req.user.role !== "ADMIN") {
         const membership = await getTeamMember(teamId, req.user.id);
         if (!membership) {
@@ -798,7 +809,6 @@ router.post(
         chain,
         targetRepo,
       } = req.body;
-
       const TARGET_REPOS = new Set([
         "namada",
         "zechub",
@@ -812,17 +822,14 @@ router.post(
       ) {
         return res.status(400).json({ error: "Invalid targetRepo" });
       }
-
       if (chain && !["MAIN", "TEST"].includes(chain)) {
         return res.status(400).json({ error: "Invalid chain value" });
       }
-
       // Team bounties are always pre-approved — matches the frontend's
       // existing isApproved: true whenever a teamId is set.
       const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
       const resolvedAssignee =
         canAssignOthers && assignee !== "none" ? assignee : null;
-
       const bounty = await prisma.bounty.create({
         data: {
           title,
@@ -832,7 +839,7 @@ router.post(
           createdBy: req.user.id,
           assignee: resolvedAssignee,
           isApproved: true,
-          categoryId,
+          categoryId: categoryId || null,
           ...(chain && { chain }),
           ...(targetRepo && { targetRepo }),
           teamId,
