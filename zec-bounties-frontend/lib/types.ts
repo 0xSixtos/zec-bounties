@@ -155,7 +155,6 @@ export interface Bounty {
   isPaid: boolean;
   isPrivate: boolean;
   paymentAuthorized: boolean;
-  paymentScheduled?: PaymentSchedule;
   paymentBatchId?: string;
   paidAt?: Date;
   paymentTxId?: string;
@@ -172,6 +171,7 @@ export interface Bounty {
   assignees?: BountyAssignee[];
   teamId?: string | null;
   team?: { id: string; name: string; logo?: string | null } | null;
+  targetRepo?: string | null;
 }
 
 // One row per bounty per payout attempt, from /api/transactions/records.
@@ -207,6 +207,7 @@ export interface BountyFormData {
   timeToComplete: Date;
   category: string;
   chain?: "MAIN" | "TEST";
+  targetRepo?: string | null;
 }
 
 export interface ZcashParamsFormData {
@@ -235,11 +236,6 @@ export interface ZcashParams {
     nickname?: string;
     email: string;
   };
-}
-
-export interface PaymentSchedule {
-  type: "instant" | "sunday_batch";
-  scheduledFor?: Date;
 }
 
 export interface WorkSubmission {
@@ -475,4 +471,14 @@ export interface LeaderboardEntry {
   rank: number;
   badges?: string[];
   role: UserRole;
+}
+
+export interface BountyActivity {
+  id: string;
+  bountyId: string;
+  actorId: string | null;
+  actor: Pick<User, "id" | "name" | "nickname" | "avatar"> | null;
+  type: string;
+  meta: Record<string, any> | null;
+  createdAt: string;
 }

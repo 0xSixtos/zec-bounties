@@ -76,6 +76,12 @@ function fixture(status = "IN_PROGRESS", submissionStatus = "pending") {
         return submissionWithRelations(include);
       },
     },
+    bountyActivity: {
+      create: async ({ data }) => {
+        trace.push({ activity: data.type });
+        return { id: "activity", ...data };
+      },
+    },
     $transaction: async work => typeof work === "function" ? work(prisma) : Promise.all(work),
   };
   const noop = () => {};
@@ -98,8 +104,15 @@ function fixture(status = "IN_PROGRESS", submissionStatus = "pending") {
     "../helpers/validateBounty": {},
     "../utils/userSelects": require("../utils/userSelects"),
     "../utils/userIdentity": {},
+    "../utils/bountyActivity": {
+      logActivity: (tx, data) => tx.bountyActivity.create({ data }),
+      publishActivity: payload => trace.push({ type: "bounty_activity", payload }),
+    },
     "../utils/bountyHelpers": {
       requireOnboarded: () => true,
+      broadcastBountyEvent: async (type, payload, bountyId, excludeUserId) => {
+        trace.push({ type, payload, bountyId, excludeUserId });
+      },
       invalidateBounty: async id => {
         version++;
         trace.push({ invalidated: "bounty:" + id });
@@ -147,6 +160,18 @@ for (const scenario of [
     const invalidateIndex = api.trace.findIndex(e => e.invalidated === "bounty:bounty");
     const eventIndex = api.trace.findIndex(e => e.type);
     assert.ok(invalidateIndex >= 0 && invalidateIndex < eventIndex, "invalidate bounty caches before any event can trigger a read");
+    const bountyEvents = api.trace.filter(e => e.type && e.type !== "bounty_activity");
+    assert.ok(bountyEvents.length > 0);
+    for (const event of bountyEvents) {
+      assert.equal(event.bountyId, "bounty", "use audience-scoped broadcasts for every bounty event");
+      assert.equal(event.excludeUserId, scenario.role === "HUNTER" ? "hunter" : "admin");
+    }
+    if (scenario.path !== "/submissions/:submissionId") {
+      const activity = scenario.path === "/:id/status" ? "STATUS_CHANGED"
+        : scenario.path === "/:id/submit" ? "WORK_SUBMITTED"
+        : `SUBMISSION_${scenario.input.status.toUpperCase()}`;
+      assert.ok(api.trace.some(e => e.activity === activity), "retain the activity log entry");
+    }
     assert.ok(Array.isArray(updatedBounty.assignees), "keep assignment-dependent open details authoritative");
     if (scenario.input.status === "rejected") assert.equal(updatedBounty.assignees.length, 0);
     assert.deepEqual(privateFieldPaths({ response: result, broadcasts: api.trace.filter(e => e.type).map(e => e.payload) }),

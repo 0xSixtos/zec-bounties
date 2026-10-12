@@ -54,6 +54,7 @@ async function openBoard(page: Page, count: number) {
     if (route.request().method() !== "GET") return route.abort();
 
     let json: unknown = [];
+    if (url.pathname === "/api/notifications") json = { notifications: [], unreadCount: 0 };
     if (url.pathname === "/auth/me") json = { user };
     if (url.pathname === "/api/bounties/categories") {
       json = [{ id: "Web Development", name: "Web Development" }];

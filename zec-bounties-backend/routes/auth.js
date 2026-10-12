@@ -13,11 +13,12 @@ const { verifyZaddress, verifyUaddress } = require("../helpers/db-query.js");
 const {
   getLatestZcashParams,
   getSystemWalletParams,
+  getWalletDataDir,
 } = require("../helpers/zcash/zcashHelper.js");
 const sendMail = require("../utils/sendMail");
 const executeZingoCliRecoveryInfo = require("../utils/zingo/zingoLibRecoveryInfo");
 const { delCache, deleteCacheByPattern } = require("../utils/cache");
-const { sendRealtimeUpdate } = require("../middleware/websocket");
+const { sendUserUpdated } = require("../middleware/websocket");
 
 const router = express.Router();
 const SECRET = process.env.JWT_SECRET;
@@ -225,7 +226,7 @@ router.get("/discord/callback", async (req, res) => {
     });
 
     await delCache("users:all");
-    sendRealtimeUpdate("user_updated", updated, userId);
+    sendUserUpdated(userId, updated);
 
     res.redirect(`${FRONTEND_URL}/profile?discord=success`);
   } catch (err) {
@@ -261,7 +262,7 @@ router.delete("/discord", authenticate, async (req, res) => {
     });
 
     await delCache("users:all");
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -317,6 +318,7 @@ router.get("/me", async (req, res) => {
         isRobin: true,
         emailNotifications: true,
         discordUsername: true,
+        canCreateTasks: true,
       },
     });
 
@@ -355,12 +357,13 @@ router.patch("/update-email-notifications", authenticate, async (req, res) => {
         z_address: true,
         UA_address: true,
         emailNotifications: true,
+        canCreateTasks: true,
       },
     });
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -413,16 +416,23 @@ router.get("/has-zcash-params", authenticate, async (req, res) => {
 router.patch("/update-zaddress", authenticate, async (req, res) => {
   const { z_address } = req.body;
 
-  const validAddress = true;
-
-  if (!validAddress) {
-    return res.status(400).json({ error: "Invalid z_address" });
-  }
-
   try {
+    if (typeof z_address !== "string" || !z_address.trim()) {
+      return res.status(400).json({ error: "z_address is required" });
+    }
+
+    const isValid = await verifyZaddress(
+      z_address.trim(),
+      getSystemWalletParams(),
+    );
+
+    if (!isValid) {
+      return res.status(400).json({ error: "Invalid z_address" });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: { z_address },
+      data: { z_address: z_address.trim() },
       select: {
         id: true,
         email: true,
@@ -431,6 +441,8 @@ router.patch("/update-zaddress", authenticate, async (req, res) => {
         z_address: true,
       },
     });
+
+    await delCache("users:all");
 
     res.json({
       message: "Z-address updated successfully",
@@ -579,16 +591,27 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
 router.patch("/update-ua-address", authenticate, async (req, res) => {
   const { UA_address } = req.body;
 
-  if (!UA_address?.startsWith("u1")) {
-    return res.status(400).json({
-      error: "Invalid mainnet unified address",
-    });
-  }
-
   try {
+    if (typeof UA_address !== "string" || !UA_address.trim().startsWith("u1")) {
+      return res.status(400).json({
+        error: "Invalid mainnet unified address",
+      });
+    }
+
+    const isValid = await verifyUaddress(
+      UA_address.trim(),
+      getSystemWalletParams(),
+    );
+
+    if (!isValid) {
+      return res.status(400).json({
+        error: "Invalid mainnet unified address",
+      });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: { UA_address },
+      data: { UA_address: UA_address.trim() },
       select: {
         id: true,
         email: true,
@@ -598,11 +621,14 @@ router.patch("/update-ua-address", authenticate, async (req, res) => {
       },
     });
 
+    await delCache("users:all");
+
     res.json({
       message: "Mainnet address updated",
       user: updatedUser,
     });
   } catch (error) {
+    console.error("Error updating UA_address:", error);
     res.status(500).json({
       error: "Failed to update UA_address",
     });
@@ -667,7 +693,7 @@ router.patch("/update-nickname", authenticate, async (req, res) => {
       deleteCacheByPattern("submissions:*"),
     ]);
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -716,7 +742,7 @@ router.patch("/select-role", authenticate, async (req, res) => {
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     const token = signSessionToken(updated);
 

@@ -42,6 +42,15 @@ async function mockAuthenticatedBackend(page: Page, user = fixtureUser) {
       return;
     }
 
+    if (url.pathname === "/api/notifications") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ notifications: [], unreadCount: 0 }),
+      });
+      return;
+    }
+
     if (
       url.pathname === "/api/bounties" ||
       url.pathname.startsWith("/api/bounties?")
@@ -134,6 +143,15 @@ async function useBountyFixture(
           { id: 1, name: "Development" },
           { id: 2, name: "Design" },
         ]),
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/notifications") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ notifications: [], unreadCount: 0 }),
       });
       return;
     }
@@ -240,6 +258,11 @@ async function useReviewerFixture(page: Page) {
           error: "Blocked by accessibility test fixture",
         }),
       });
+      return;
+    }
+
+    if (url.pathname === "/api/notifications") {
+      await route.fulfill({ json: { notifications: [], unreadCount: 0 } });
       return;
     }
 

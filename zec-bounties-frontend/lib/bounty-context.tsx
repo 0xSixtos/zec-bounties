@@ -27,6 +27,7 @@ import type {
   TeamVerificationStatus,
   PaymentRecord,
   LeaderboardEntry,
+  BountyActivity,
 } from "./types";
 import { backendUrl, backendWebSpocketUrl } from "./configENV";
 import { displayName } from "./displayName";
@@ -181,6 +182,7 @@ interface BountyContextType {
   statusCounts: Record<string, number>;
   unpaidDoneCount: number;
   fetchBountyById: (id: string) => Promise<Bounty | null>;
+  fetchBountyActivity: (bountyId: string) => Promise<BountyActivity[]>;
   fetchTransactionHashes: () => Promise<void>;
   applyToBounty: (bountyId: string, message: string) => Promise<void>;
   editBounty: (id: string, data: Partial<BountyFormData>) => void;
@@ -2427,6 +2429,29 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
         const msg = JSON.parse(event.data);
 
         switch (msg.type) {
+          case "bounty_chat_message":
+            window.dispatchEvent(
+              new CustomEvent("bounty-chat-message", { detail: msg.payload }),
+            );
+            break;
+
+          case "bounty_chat_cleared":
+            window.dispatchEvent(
+              new CustomEvent("bounty-chat-cleared", { detail: msg.payload }),
+            );
+            window.dispatchEvent(new Event("bounty-notification"));
+            break;
+
+          case "notification_new":
+            window.dispatchEvent(new Event("bounty-notification"));
+            break;
+
+          case "bounty_activity":
+            window.dispatchEvent(
+              new CustomEvent("bounty-activity", { detail: msg.payload }),
+            );
+            break;
+
           case "new_bounties":
             setBounties((prev) =>
               prev.some((b) => b.id === msg.payload.id)
@@ -2594,29 +2619,6 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
             setAddress(msg.payload.addresses?.encoded_address);
             break;
 
-          case "bounty_payment_authorized":
-            setBounties((prev) =>
-              prev.map((bounty) =>
-                bounty.id === msg.payload.id ? msg.payload : bounty,
-              ),
-            );
-            break;
-
-          case "bounty_marked_paid":
-            setBounties((prev) =>
-              prev.map((bounty) =>
-                bounty.id === msg.payload.id ? msg.payload : bounty,
-              ),
-            );
-            patchTeamBounty(msg.payload);
-            break;
-
-          case "bounty_paid":
-            fetchBounties();
-            fetchTransactionHashes();
-            fetchBalance();
-            break;
-
           case "bounties_exported":
             fetchTotalStats();
             break;
@@ -2675,6 +2677,8 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
             setTeams((prev) =>
               prev.map((t) => {
                 if (t.id !== msg.payload.teamId) return t;
+                // Broadcasts carry public profile fields only, so keep any
+                // details (e.g. email) we already had for existing members.
                 const merged = [
                   ...t.members.filter(
                     (m) =>
@@ -2682,11 +2686,24 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
                         (nm: TeamMember) => nm.userId === m.userId,
                       ),
                   ),
-                  ...msg.payload.members,
+                  ...msg.payload.members.map((nm: TeamMember) => {
+                    const existing = t.members.find(
+                      (m) => m.userId === nm.userId,
+                    );
+                    return existing
+                      ? {
+                          ...existing,
+                          ...nm,
+                          user: { ...(existing as any).user, ...(nm as any).user },
+                        }
+                      : nm;
+                  }),
                 ];
                 return { ...t, members: merged };
               }),
             );
+            // Reload so new members' details come from the authenticated API.
+            fetchTeams();
             // Re-fetch params in case team wallet was auto-assigned to new members
             fetchZcashParams();
             break;
@@ -3064,6 +3081,23 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const fetchBountyActivity = async (
+    bountyId: string,
+  ): Promise<BountyActivity[]> => {
+    if (!currentUser) return [];
+    try {
+      const res = await fetch(
+        `${backendUrl}/api/bounties/${bountyId}/activity`,
+        { headers: getAuthHeaders() },
+      );
+      if (!res.ok) throw new Error("Failed to fetch activity");
+      return await res.json();
+    } catch (error) {
+      console.error("Failed to fetch bounty activity:", error);
+      return [];
+    }
+  };
+
   const fetchCommunities = async (): Promise<void> => {
     setCommunitiesLoading(true);
     try {
@@ -3183,6 +3217,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
               : data.assignee,
           categoryId: data.category,
           chain: data.chain,
+          targetRepo: data.targetRepo || null,
           // teamId is now in the URL for team bounties, not the body — the
           // backend route already knows which team from req.params.
           ...(!data.teamId && { teamId: null }),
@@ -3234,6 +3269,9 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
           ...(data.bountyAmount && { bountyAmount: data.bountyAmount }),
           ...(data.timeToComplete && { timeToComplete: data.timeToComplete }),
           ...(data.chain && { chain: data.chain }),
+          ...(data.targetRepo !== undefined && {
+            targetRepo: data.targetRepo || null,
+          }),
           notifyUsers: data.notifyUsers ?? false,
         }),
       });
@@ -4050,6 +4088,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
         statusCounts,
         unpaidDoneCount,
         fetchBountyById,
+        fetchBountyActivity,
         applyToBounty,
         editBounty,
         users,

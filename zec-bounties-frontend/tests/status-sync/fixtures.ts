@@ -140,6 +140,7 @@ export class Backend {
         }
         return this.respond(page, route, json);
       }
+      if (pathname === "/api/notifications") json = { notifications: [], unreadCount: 0 };
       if (pathname === "/auth/me") json = { user };
       if (pathname === "/api/zcash/params") json = { data: [{ id: "fixture-wallet", accountName: "Fixture wallet", isDefault: true, chain: "MAIN" }] };
       if (pathname === "/api/bounties/categories") json = [{ id: "Development", name: "Development" }];
