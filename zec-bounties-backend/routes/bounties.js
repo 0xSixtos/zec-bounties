@@ -705,6 +705,17 @@ router.post("/:id/assignees", authenticate, async (req, res) => {
         await tx.bountyAssignee.createMany({
           data: userIds.map((userId) => ({ bountyId, userId })),
         });
+        // Other routes still read the legacy single `assignee` field, so clear
+        // it if the new list drops that user. On a DONE bounty it is the
+        // payee, so leave it alone there.
+        await tx.bounty.updateMany({
+          where: {
+            id: bountyId,
+            status: { not: "DONE" },
+            assignee: { notIn: userIds },
+          },
+          data: { assignee: null },
+        });
         if (["TO_DO", "CANCELLED"].includes(bounty.status)) {
           await tx.bounty.update({
             where: { id: bountyId },
@@ -880,10 +891,18 @@ router.delete("/:id/assignees/:userId", authenticate, async (req, res) => {
       });
     }
 
-    const removedRow = await prisma.bountyAssignee.delete({
-      where: { bountyId_userId: { bountyId, userId } },
-      include: { user: { select: USER_SELECT_MINIMAL } },
-    });
+    const [removedRow] = await prisma.$transaction([
+      prisma.bountyAssignee.delete({
+        where: { bountyId_userId: { bountyId, userId } },
+        include: { user: { select: USER_SELECT_MINIMAL } },
+      }),
+      // Also clear the legacy single `assignee` field if it pointed to this
+      // user, except on a DONE bounty, where it is the payee
+      prisma.bounty.updateMany({
+        where: { id: bountyId, status: { not: "DONE" }, assignee: userId },
+        data: { assignee: null },
+      }),
+    ]);
     logActivity(null, {
       bountyId,
       actorId: req.user.id,
