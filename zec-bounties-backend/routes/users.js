@@ -3,6 +3,11 @@ const prisma = require("../prisma/client");
 const { authenticate, isAdmin } = require("../middleware/auth");
 const { delCache } = require("../utils/cache");
 const { userIdentityWhere } = require("../utils/userIdentity");
+const {
+  assignedDoneWhere,
+  recentCompletedWhere,
+  recentCreatedWhere,
+} = require("../utils/profileBounties");
 
 const router = express.Router();
 
@@ -60,15 +65,7 @@ function stripAmountsIfPrivate(rows, allowAmount) {
   });
 }
 
-function assignedDoneWhere(userId, chain) {
-  return {
-    status: "DONE",
-    chain,
-    OR: [{ assignee: userId }, { assignees: { some: { userId } } }],
-  };
-}
-
-async function loadChainStats(userId, chain) {
+async function loadChainStats(userId, chain, includePrivate) {
   const [
     completed,
     created,
@@ -94,7 +91,7 @@ async function loadChainStats(userId, chain) {
       _sum: { bountyAmount: true },
     }),
     prisma.bounty.findMany({
-      where: assignedDoneWhere(userId, chain),
+      where: recentCompletedWhere(userId, chain, includePrivate),
       orderBy: { paidAt: "desc" },
       take: 5,
       select: {
@@ -108,7 +105,7 @@ async function loadChainStats(userId, chain) {
       },
     }),
     prisma.bounty.findMany({
-      where: { createdBy: userId, chain },
+      where: recentCreatedWhere(userId, chain, includePrivate),
       orderBy: { dateCreated: "desc" },
       take: 5,
       select: {
@@ -138,10 +135,10 @@ async function loadChainStats(userId, chain) {
   };
 }
 
-async function loadStats(userId) {
+async function loadStats(userId, includePrivate) {
   const [MAIN, TEST] = await Promise.all([
-    loadChainStats(userId, "MAIN"),
-    loadChainStats(userId, "TEST"),
+    loadChainStats(userId, "MAIN", includePrivate),
+    loadChainStats(userId, "TEST", includePrivate),
   ]);
   return { MAIN, TEST };
 }
@@ -351,8 +348,10 @@ router.get("/:idOrNickname/public", async (req, res) => {
       (isAdmin && !isOwner) ||
       (isOwner && String(req.query.full || "") === "1");
 
+    // The recent lists carry titles, so private bounties stay out of them
+    // unless the viewer is the profile owner or an admin.
     const [stats, teams] = await Promise.all([
-      loadStats(user.id),
+      loadStats(user.id, isOwner || isAdmin),
       Promise.resolve(
         (user.teamMembers || []).map((row) => ({
           id: row.team.id,
