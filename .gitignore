@@ -18,6 +18,7 @@ yarn-error.log*
 
 # env files
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -34,3 +35,4 @@ next-env.d.ts
 /bounties-export-2026-10-02.json
 /ideas.txt
 /sample-bounty-ideas.md
+.vscode
