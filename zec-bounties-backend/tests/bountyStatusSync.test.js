@@ -54,7 +54,13 @@ function fixture(status = "IN_PROGRESS", submissionStatus = "pending") {
   const cached = { ...row };
   const prisma = {
     bounty: {
-      findUnique: async () => ({ ...row, assignees: [...assignees], workSubmissions: [] }),
+      findUnique: async ({ include } = {}) => include ? bountyWithRelations(include)
+        : { ...row, assignees: [...assignees], workSubmissions: [] },
+      updateMany: async ({ where, data }) => {
+        if (where.status?.in && !where.status.in.includes(row.status)) return { count: 0 };
+        Object.assign(row, data);
+        return { count: 1 };
+      },
       update: async ({ data, include }) => {
         Object.assign(row, data);
         return bountyWithRelations(include);
@@ -69,7 +75,13 @@ function fixture(status = "IN_PROGRESS", submissionStatus = "pending") {
         Object.assign(submission, data);
         return submissionWithRelations(include);
       },
-      findUnique: async () => ({ ...submission, bounty: { ...row } }),
+      findUnique: async ({ include } = {}) => ({ ...submissionWithRelations(include), bounty: { ...row } }),
+      updateMany: async ({ where, data }) => {
+        if (where.status !== submission.status || where.submittedAt !== submission.submittedAt
+          || where.reviewedAt !== submission.reviewedAt) return { count: 0 };
+        Object.assign(submission, data);
+        return { count: 1 };
+      },
       findFirst: async () => null,
       update: async ({ data, include }) => {
         Object.assign(submission, data);

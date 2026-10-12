@@ -46,6 +46,8 @@ const {
   ONBOARDED_ROLES,
   requireOnboarded,
   getWeeklyBountyQuota,
+  createBountyWithQuota,
+  WeeklyBountyQuotaError,
   requireTaskCreation,
 } = require("../utils/bountyHelpers");
 const {
@@ -231,32 +233,23 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
   try {
     if (!requireOnboarded(req, res)) return;
 
-    if (req.user.role !== "ADMIN") {
-      const quota = await getWeeklyBountyQuota(req.user.id);
-      if (quota.remaining <= 0) {
-        return res.status(429).json({
-          error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
-          ...quota,
-        });
-      }
-    }
-
     const {
       title,
       description,
       bountyAmount,
       timeToComplete,
       assignee,
-      isApproved,
       categoryId,
       chain,
       teamId,
       targetRepo,
     } = req.body;
 
-    const resolvedTargetRepo = resolveTargetRepo(targetRepo);
-    if (resolvedTargetRepo === undefined) {
-      return res.status(400).json({ error: "Invalid targetRepo" });
+    const validation = validateBountyCreate(req.body);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+    const categoryValidation = await validateCategory(prisma, categoryId);
+    if (!categoryValidation.valid) {
+      return res.status(400).json({ error: categoryValidation.error });
     }
 
     // Only admins may create a pre-approved bounty. Non-admin callers'
@@ -267,6 +260,10 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
           ? !!isApproved
           : true
         : false;
+    const resolvedTargetRepo = resolveTargetRepo(targetRepo);
+    if (resolvedTargetRepo === undefined) {
+      return res.status(400).json({ error: "Invalid targetRepo" });
+    }
 
     if (chain && !["MAIN", "TEST"].includes(chain)) {
       return res.status(400).json({ error: "Invalid chain value" });
@@ -310,7 +307,7 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         ? assignee
         : null;
 
-    const bounty = await prisma.bounty.create({
+    const bounty = await createBountyWithQuota(req.user, {
       data: {
         title,
         description,
@@ -319,13 +316,21 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         createdBy: req.user.id,
         assignee: resolvedAssignee,
         isApproved: resolvedIsApproved,
+        categoryId: categoryId || null,
+
+        // Approval is an authorization decision, so it is derived here rather
+        // than read from the request body: admins and verified teams post
+        // pre-approved, everyone else waits for review.
+        isApproved: req.user.role === "ADMIN" || team !== null,
         categoryId,
         ...(chain && { chain }),
         ...(teamId && { teamId }),
         ...(resolvedTargetRepo && { targetRepo: resolvedTargetRepo }),
-        // Denormalized from the team at creation time — a bounty's privacy
-        // always tracks its team's current privacy setting.
-        isPrivate: team?.isPrivate ?? false,
+        // Team bounties track their team's privacy. A teamless bounty that
+        // self-assigns is personal task tracking, so it stays off the public
+        // board until an admin approves it (see /:id/approve below).
+        isPrivate: team ? team.isPrivate : resolvedAssignee === req.user.id,
+
         ...(resolvedAssignee && {
           assignees: {
             create: {
@@ -425,6 +430,9 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
       }
     })();
   } catch (err) {
+    if (err instanceof WeeklyBountyQuotaError) {
+      return res.status(429).json({ error: err.message, ...err.quota });
+    }
     console.error(err);
     res.status(500).json({ error: "Failed to create bounty" });
   }
@@ -434,7 +442,10 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
 router.get("/", optionalAuthenticate, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    // Clamp to 1..50. A negative value passed Math.min untouched and reached
+    // Prisma as `take: -N`, which reads N rows from the end of the ordering
+    // with no upper bound.
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
 
     const isAuthed = Boolean(req.user);
     const isDev = process.env.NODE_ENV !== "production";
@@ -698,6 +709,17 @@ router.post("/:id/assignees", authenticate, async (req, res) => {
         await tx.bountyAssignee.createMany({
           data: userIds.map((userId) => ({ bountyId, userId })),
         });
+        // Other routes still read the legacy single `assignee` field, so clear
+        // it if the new list drops that user. On a DONE bounty it is the
+        // payee, so leave it alone there.
+        await tx.bounty.updateMany({
+          where: {
+            id: bountyId,
+            status: { not: "DONE" },
+            assignee: { notIn: userIds },
+          },
+          data: { assignee: null },
+        });
         if (["TO_DO", "CANCELLED"].includes(bounty.status)) {
           await tx.bounty.update({
             where: { id: bountyId },
@@ -873,10 +895,18 @@ router.delete("/:id/assignees/:userId", authenticate, async (req, res) => {
       });
     }
 
-    const removedRow = await prisma.bountyAssignee.delete({
-      where: { bountyId_userId: { bountyId, userId } },
-      include: { user: { select: USER_SELECT_MINIMAL } },
-    });
+    const [removedRow] = await prisma.$transaction([
+      prisma.bountyAssignee.delete({
+        where: { bountyId_userId: { bountyId, userId } },
+        include: { user: { select: USER_SELECT_MINIMAL } },
+      }),
+      // Also clear the legacy single `assignee` field if it pointed to this
+      // user, except on a DONE bounty, where it is the payee
+      prisma.bounty.updateMany({
+        where: { id: bountyId, status: { not: "DONE" }, assignee: userId },
+        data: { assignee: null },
+      }),
+    ]);
     logActivity(null, {
       bountyId,
       actorId: req.user.id,
@@ -948,9 +978,35 @@ router.get("/:id/assignees", authenticate, async (req, res) => {
 router.patch("/:id/approve", authenticate, isAdmin, async (req, res) => {
   try {
     const bountyId = req.params.id;
-    const updated = await prisma.bounty.update({
-      where: { id: bountyId },
-      data: { isApproved: true },
+    const bounty = await prisma.bounty.findUnique({
+      where: { id: req.params.id },
+      select: { createdBy: true, assignee: true },
+    });
+    if (!bounty) return res.status(404).json({ error: "Bounty not found" });
+
+    // Approving is what turns a personal bounty into a public one, so it also
+    // undoes the two markers that kept it personal: its privacy, and the
+    // self-assignment that would otherwise stop anyone else from applying. An
+    // assignment an admin made deliberately is left alone.
+    const releaseSelfAssignment = bounty.assignee === bounty.createdBy;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (releaseSelfAssignment) {
+        // Creation writes the self-assignment to both the scalar column and
+        // the join table; clearing only the scalar would leave the creator as
+        // the sole assignee, and PATCH /:id/status pays the sole assignee.
+        await tx.bountyAssignee.deleteMany({
+          where: { bountyId: req.params.id, userId: bounty.createdBy },
+        });
+      }
+      return tx.bounty.update({
+        where: { id: req.params.id },
+        data: {
+          isApproved: true,
+          isPrivate: false,
+          ...(releaseSelfAssignment && { assignee: null }),
+        },
+      });
     });
     await broadcastBountyEvent(
       "bounty_approved",
@@ -1089,90 +1145,106 @@ router.post("/:id/submit", authenticate, async (req, res) => {
       return res.status(400).json({ error: "Work description is required" });
     }
 
-    // Single query — grab only what validation needs
-    const bounty = await prisma.bounty.findUnique({
-      where: { id: bountyId },
-      select: {
-        id: true,
-        isApproved: true,
-        status: true,
-        workSubmissions: {
-          where: {
-            submittedBy: userId,
-            status: { in: ["pending", "approved"] },
-          },
-          select: { id: true },
-        },
-      },
-    });
-
-    if (!bounty) return res.status(404).json({ error: "Bounty not found" });
-
-    const isAssigned = await prisma.bountyAssignee.findUnique({
-      where: { bountyId_userId: { bountyId, userId } },
-      select: { userId: true },
-    });
-    if (!isAssigned)
-      return res
-        .status(403)
-        .json({ error: "You are not assigned to this bounty" });
-    if (!bounty.isApproved)
-      return res
-        .status(400)
-        .json({ error: "Bounty must be approved before submitting work" });
-    if (!["TO_DO", "IN_PROGRESS", "IN_REVIEW"].includes(bounty.status)) {
-      return res.status(400).json({
-        error: "Work cannot be submitted for bounties in this status",
-      });
-    }
-    if (bounty.workSubmissions.length > 0) {
-      return res
-        .status(400)
-        .json({ error: "You have already submitted work for this bounty" });
-    }
-
-    // Transaction: create submission + update status atomically
-    const [workSubmission, updatedBounty, activityRow] =
-      await prisma.$transaction([
-        prisma.workSubmission.create({
-          data: {
-            bountyId,
-            submittedBy: userId,
-            description: description.trim(),
-            deliverableUrl: deliverableUrl?.trim() || null,
-            status: "pending",
-          },
-          include: {
-            submitterUser: {
-              select: USER_SELECT,
+    // Retry serialization conflicts with a fresh eligibility snapshot. Retrying
+    // only the writes would preserve a stale duplicate/status decision.
+    let result;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        result = await prisma.$transaction(async (tx) => {
+          const bounty = await tx.bounty.findUnique({
+            where: { id: bountyId },
+            select: {
+              id: true,
+              isApproved: true,
+              status: true,
+              assignee: true,
+              workSubmissions: {
+                where: {
+                  submittedBy: userId,
+                  status: { in: ["pending", "approved"] },
+                },
+                select: { id: true },
+              },
             },
-          },
-        }),
-        prisma.bounty.update({
-          where: { id: bountyId },
-          data: { status: "IN_REVIEW" },
-          include: {
-            ...ASSIGNEE_INCLUDE,
-            createdByUser: {
-              select: USER_SELECT,
+          });
+
+          if (!bounty) return { statusCode: 404, error: "Bounty not found" };
+
+          const isAssigned =
+            bounty.assignee === userId ||
+            !!(await tx.bountyAssignee.findUnique({
+              where: { bountyId_userId: { bountyId, userId } },
+              select: { userId: true },
+            }));
+          if (!isAssigned)
+            return { statusCode: 403, error: "You are not assigned to this bounty" };
+          if (!bounty.isApproved)
+            return {
+              statusCode: 400,
+              error: "Bounty must be approved before submitting work",
+            };
+          if (!["TO_DO", "IN_PROGRESS", "IN_REVIEW"].includes(bounty.status)) {
+            return {
+              statusCode: 400,
+              error: "Work cannot be submitted for bounties in this status",
+            };
+          }
+          if (bounty.workSubmissions.length > 0) {
+            return {
+              statusCode: 400,
+              error: "You have already submitted work for this bounty",
+            };
+          }
+          // Both writes belong to the same transaction as the eligibility checks.
+          const workSubmission = await tx.workSubmission.create({
+            data: {
+              bountyId,
+              submittedBy: userId,
+              description: description.trim(),
+              deliverableUrl: deliverableUrl?.trim() || null,
+              status: "pending",
             },
-            assigneeUser: {
-              select: USER_SELECT,
+            include: {
+              submitterUser: {
+                select: USER_SELECT,
+              },
             },
-            workSubmissions: {
-              include: {
-                submitterUser: {
-                  select: USER_SELECT,
+          });
+          const updatedBounty = await tx.bounty.update({
+            where: { id: bountyId },
+            data: { status: "IN_REVIEW" },
+            include: {
+              ...ASSIGNEE_INCLUDE,
+              createdByUser: {
+                select: USER_SELECT,
+              },
+              assigneeUser: {
+                select: USER_SELECT,
+              },
+              workSubmissions: {
+                include: {
+                  submitterUser: {
+                    select: USER_SELECT,
+                  },
                 },
               },
             },
-          },
-        }),
-        prisma.bountyActivity.create({
-          data: { bountyId, actorId: userId, type: "WORK_SUBMITTED" },
-          include: { actor: { select: USER_SELECT_BASIC } },
-        }),
-      ]);
+          });
+          const activityRow = await tx.bountyActivity.create({
+            data: { bountyId, actorId: userId, type: "WORK_SUBMITTED" },
+            include: { actor: { select: USER_SELECT_BASIC } },
+          });
+          return { workSubmission, updatedBounty, activityRow };
+        }, { isolationLevel: "Serializable" });
+        break;
+      } catch (error) {
+        if (error.code !== "P2034" || attempt === 2) throw error;
+      }
+    }
+    if (result.error) {
+      return res.status(result.statusCode).json({ error: result.error });
+    }
+    const { workSubmission, updatedBounty, activityRow } = result;
 
     // A receiving client may read immediately after any event.
     await invalidateBounty(bountyId);
@@ -1233,7 +1305,7 @@ router.get("/:id/submissions", authenticate, async (req, res) => {
 
     const bounty = await prisma.bounty.findUnique({
       where: { id: bountyId },
-      select: { id: true, createdBy: true },
+      select: { id: true, createdBy: true, assignee: true },
     });
     if (!bounty) return res.status(404).json({ error: "Bounty not found" });
 
@@ -1242,11 +1314,12 @@ router.get("/:id/submissions", authenticate, async (req, res) => {
 
     let isAssignee = false;
     if (!isCreatorOrAdmin) {
-      const assignee = await prisma.bountyAssignee.findUnique({
-        where: { bountyId_userId: { bountyId, userId } },
-        select: { userId: true },
-      });
-      isAssignee = !!assignee;
+      isAssignee =
+        bounty.assignee === userId ||
+        !!(await prisma.bountyAssignee.findUnique({
+          where: { bountyId_userId: { bountyId, userId } },
+          select: { userId: true },
+        }));
     }
 
     if (!isCreatorOrAdmin && !isAssignee) {
@@ -1480,6 +1553,7 @@ router.patch(
 // it) — saving resubmits it as "pending" and restarts the 15-min window from
 // that save, so it now behaves like a normal fresh submission again.
 router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
+  const editConflict = new Error("submission-edit-conflict");
   try {
     const { submissionId } = req.params;
     const { description, deliverableUrl } = req.body;
@@ -1495,6 +1569,7 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
         id: true,
         submittedBy: true,
         submittedAt: true,
+        reviewedAt: true,
         bountyId: true,
         status: true,
       },
@@ -1523,8 +1598,16 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
     const wasRevision = submission.status === "needs_revision";
 
     const [updated, updatedBounty] = await prisma.$transaction(async (tx) => {
-      const updSub = await tx.workSubmission.update({
-        where: { id: submissionId },
+      // Recheck eligibility in the write itself: a review may have committed
+      // since the initial read, even while an edit was waiting for this row.
+      const edited = await tx.workSubmission.updateMany({
+        where: {
+          id: submissionId,
+          submittedBy: userId,
+          status: submission.status,
+          submittedAt: submission.submittedAt,
+          reviewedAt: submission.reviewedAt,
+        },
         data: {
           description: description.trim(),
           deliverableUrl: deliverableUrl?.trim() || null,
@@ -1536,16 +1619,27 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
             reviewNotes: null,
           }),
         },
-        include: {
-          submitterUser: { select: USER_SELECT },
-        },
+      });
+      if (edited.count !== 1) throw editConflict;
+      const updSub = await tx.workSubmission.findUnique({
+        where: { id: submissionId },
+        include: { submitterUser: { select: USER_SELECT } },
       });
 
       let updBounty = null;
       if (wasRevision) {
-        updBounty = await tx.bounty.update({
-          where: { id: submission.bountyId },
+        // Another submission's approval or a cancellation must not be undone.
+        // Throwing also rolls back the submission edit and cleared review fields.
+        const reopened = await tx.bounty.updateMany({
+          where: {
+            id: submission.bountyId,
+            status: { in: ["TO_DO", "IN_PROGRESS", "IN_REVIEW"] },
+          },
           data: { status: "IN_REVIEW" },
+        });
+        if (reopened.count !== 1) throw editConflict;
+        updBounty = await tx.bounty.findUnique({
+          where: { id: submission.bountyId },
           include: {
             ...ASSIGNEE_INCLUDE,
             team: { select: { id: true, name: true, logo: true } },
@@ -1580,6 +1674,11 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
       ...(updatedBounty && { bounty: updatedBounty }),
     });
   } catch (error) {
+    if (error === editConflict) {
+      return res.status(409).json({
+        error: "Submission or bounty changed while editing. Refresh and try again.",
+      });
+    }
     console.error("Error editing submission:", error);
     res.status(500).json({ error: "Failed to edit submission" });
   }
@@ -2658,6 +2757,13 @@ router.put("/:id", authenticate, async (req, res) => {
       return res.status(403).json({ error: "Cannot reassign team" });
     }
 
+    const validation = validateBountyUpdate(req.body);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+    const categoryValidation = await validateCategory(prisma, req.body.categoryId);
+    if (!categoryValidation.valid) {
+      return res.status(400).json({ error: categoryValidation.error });
+    }
+
     const { notifyUsers = false } = req.body;
 
     let resolvedIsPrivate;
@@ -2722,8 +2828,12 @@ router.put("/:id", authenticate, async (req, res) => {
       data: {
         ...(req.body.title && { title: req.body.title }),
         ...(req.body.description && { description: req.body.description }),
-        ...(bountyAmount !== undefined && { bountyAmount }),
-        ...(timeToComplete && { timeToComplete }),
+        ...(req.body.bountyAmount !== undefined && {
+          bountyAmount: Number(req.body.bountyAmount),
+        }),
+        ...(req.body.timeToComplete && {
+          timeToComplete: new Date(req.body.timeToComplete),
+        }),
         ...(req.body.assignee !== undefined && { assignee: req.body.assignee }),
         ...(req.body.chain !== undefined && { chain: req.body.chain }),
         ...(req.body.isApproved !== undefined && {
