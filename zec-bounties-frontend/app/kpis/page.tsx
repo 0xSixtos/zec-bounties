@@ -12,13 +12,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ArrowUpDown, Zap, Users, Pencil } from "lucide-react";
 import {
-  ArrowUpDown,
-  Zap,
-  Users,
-  Pencil,
-} from "lucide-react";
-import { BadgeIcons, BadgeSvg, SpecialtyFilterChips, StarFilterChips, AssignableBadgeList } from "@/components/badges/badge-icons";
+  BadgeIcons,
+  BadgeSvg,
+  SpecialtyFilterChips,
+  StarFilterChips,
+  AssignableBadgeList,
+} from "@/components/badges/badge-icons";
 import { UaReceiverIcons } from "@/components/address/ua-receiver-icons";
 import { getBadgeTooltip, matchesBadgeFilter } from "@/lib/badges";
 import {
@@ -220,7 +221,10 @@ export default function KpisDashboard() {
   );
   const [sortKey, setSortKey] = useState<SortKey>("completed");
   const [sortDirection, setSortDirection] = useState<"desc" | "asc">("desc");
-  const [showAllUsers, setShowAllUsers] = useState(false);
+  const [showAllUsers, setShowAllUsers] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem("kpis:showAllUsers") === "true";
+  });
   const [isRefreshingBalance, setIsRefreshingBalance] = useState(false);
   const [isRescanning, setIsRescanning] = useState(false);
   const [rescanMessage, setRescanMessage] = useState("");
@@ -245,12 +249,12 @@ export default function KpisDashboard() {
   const [isSavingBadges, setIsSavingBadges] = useState(false);
 
   const getDefaultAvatarClasses = (
-  completed: number,
-  badges: string[] = [],
-) => {
-  // Always a plain muted circle when no image
-  return "bg-muted text-muted-foreground";
-};
+    completed: number,
+    badges: string[] = [],
+  ) => {
+    // Always a plain muted circle when no image
+    return "bg-muted text-muted-foreground";
+  };
 
   const [timeRange, setTimeRange] = useState<"30d" | "90d" | "all">("all");
 
@@ -326,6 +330,11 @@ export default function KpisDashboard() {
       setShowAllUsers(false);
     }
   }, [viewMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    sessionStorage.setItem("kpis:showAllUsers", String(showAllUsers));
+  }, [showAllUsers]);
 
   // Fetch top contributors
   useEffect(() => {
@@ -452,9 +461,7 @@ export default function KpisDashboard() {
   }, [topContributors, sortKey, sortDirection]);
 
   const displayedContributors = useMemo(() => {
-    return sortedContributors.filter((u) =>
-      matchesBadgeFilter(badgeFilter, u),
-    );
+    return sortedContributors.filter((u) => matchesBadgeFilter(badgeFilter, u));
   }, [sortedContributors, badgeFilter]);
 
   // Prefer server summary; fall back for old API shape
@@ -577,26 +584,13 @@ export default function KpisDashboard() {
 
       if (!res.ok) throw new Error("Failed to update badges");
 
-      const params = new URLSearchParams();
-      if (showAllUsers) params.set("all", "true");
-      params.set("timeRange", timeRange);
-
-      const refreshRes = await fetch(
-        `${backendUrl}/api/kpis/top-contributors?${params.toString()}`,
-        {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("authToken")}`,
-          },
-        },
+      setTopContributors((prev) =>
+        prev.map((user) =>
+          user.id === selectedUserForBadges.id
+            ? { ...user, badges: selectedBadges }
+            : user,
+        ),
       );
-
-      if (refreshRes.ok) {
-        const raw = await refreshRes.json();
-        const { list, summary } = parseTopContributorsResponse(raw);
-        const enriched = enrichWithReceivers(list, isAdmin);
-        setTopContributors(enriched);
-        setKpiSummary(summary);
-      }
 
       toast.success("Badges updated");
       closeBadgeModal();
@@ -669,11 +663,17 @@ export default function KpisDashboard() {
               {/* Badge + star filters — UA filters live on /admin/kpis only */}
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-muted-foreground">Badges</span>
-                <SpecialtyFilterChips value={badgeFilter} onChange={setBadgeFilter} />
+                <SpecialtyFilterChips
+                  value={badgeFilter}
+                  onChange={setBadgeFilter}
+                />
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm text-muted-foreground">Stars</span>
-                <StarFilterChips value={badgeFilter} onChange={setBadgeFilter} />
+                <StarFilterChips
+                  value={badgeFilter}
+                  onChange={setBadgeFilter}
+                />
               </div>
               {badgeFilter.length > 0 && (
                 <Button
@@ -690,7 +690,7 @@ export default function KpisDashboard() {
           </div>
 
           {/* Top Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 mb-8">
+          <div className="grid grid-cols-1 imd:grid-cols-4 xl:grid-cols-6 gap-4 mb-8">
             {[
               { label: "Total Bounties", value: totalBounties },
               {
@@ -880,7 +880,9 @@ export default function KpisDashboard() {
                             {viewMode === "admin" && (
                               <TableCell>
                                 <div className="flex items-center gap-1.5">
-                                  <UaReceiverIcons receivers={(user as any).receivers} />
+                                  <UaReceiverIcons
+                                    receivers={(user as any).receivers}
+                                  />
                                 </div>
                               </TableCell>
                             )}
@@ -1294,73 +1296,104 @@ export default function KpisDashboard() {
                 )}
 
                 {/* Star Override */}
-{selectedUserForBadges && (
-  <div className="mb-6 border-t border-border pt-4">
-    <p className="text-sm text-muted-foreground mb-3">
-      Star Override
-    </p>
-    <div className="space-y-1">
-      {[
-        { value: "avatar:default", label: "Default (based on completed bounties)", star: null },
-        { value: "avatar:1", label: "1 Task", star: "1-task" },
-        { value: "avatar:5", label: "5 Tasks", star: "5-tasks" },
-        { value: "avatar:10", label: "10 Tasks", star: "10-tasks" },
-        { value: "avatar:15", label: "15 Tasks", star: "15-tasks" },
-        { value: "avatar:25", label: "25 Tasks", star: "25-tasks" },
-        { value: "avatar:50", label: "50 Tasks", star: "50-tasks" },
-      ].map((option) => {
-        const isSelected =
-          selectedBadges.includes(option.value) ||
-          (option.value === "avatar:default" &&
-            !selectedBadges.some((b) => b.startsWith("avatar:")));
+                {selectedUserForBadges && (
+                  <div className="mb-6 border-t border-border pt-4">
+                    <p className="text-sm text-muted-foreground mb-3">
+                      Star Override
+                    </p>
+                    <div className="space-y-1">
+                      {[
+                        {
+                          value: "avatar:default",
+                          label: "Default (based on completed bounties)",
+                          star: null,
+                        },
+                        { value: "avatar:1", label: "1 Task", star: "1-task" },
+                        {
+                          value: "avatar:5",
+                          label: "5 Tasks",
+                          star: "5-tasks",
+                        },
+                        {
+                          value: "avatar:10",
+                          label: "10 Tasks",
+                          star: "10-tasks",
+                        },
+                        {
+                          value: "avatar:15",
+                          label: "15 Tasks",
+                          star: "15-tasks",
+                        },
+                        {
+                          value: "avatar:25",
+                          label: "25 Tasks",
+                          star: "25-tasks",
+                        },
+                        {
+                          value: "avatar:50",
+                          label: "50 Tasks",
+                          star: "50-tasks",
+                        },
+                      ].map((option) => {
+                        const isSelected =
+                          selectedBadges.includes(option.value) ||
+                          (option.value === "avatar:default" &&
+                            !selectedBadges.some((b) =>
+                              b.startsWith("avatar:"),
+                            ));
 
-        return (
-          <button
-            key={option.value}
-            onClick={() => {
-              const filtered = selectedBadges.filter(
-                (b) => !b.startsWith("avatar:"),
-              );
-              if (option.value !== "avatar:default") {
-                setSelectedBadges([...filtered, option.value]);
-              } else {
-                setSelectedBadges(filtered);
-              }
-            }}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-              isSelected
-                ? "bg-muted border border-primary"
-                : "hover:bg-muted/50 border border-transparent"
-            }`}
-          >
-            {option.star ? (
-              <BadgeSvg
-                badgeKey={option.star}
-                title={option.label}
-                className="w-5 h-5"
-              />
-            ) : (
-              <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
-                <Users className="w-3.5 h-3.5 text-muted-foreground" />
-              </div>
-            )}
+                        return (
+                          <button
+                            key={option.value}
+                            onClick={() => {
+                              const filtered = selectedBadges.filter(
+                                (b) => !b.startsWith("avatar:"),
+                              );
+                              if (option.value !== "avatar:default") {
+                                setSelectedBadges([...filtered, option.value]);
+                              } else {
+                                setSelectedBadges(filtered);
+                              }
+                            }}
+                            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                              isSelected
+                                ? "bg-muted border border-primary"
+                                : "hover:bg-muted/50 border border-transparent"
+                            }`}
+                          >
+                            {option.star ? (
+                              <BadgeSvg
+                                badgeKey={option.star}
+                                title={option.label}
+                                className="w-5 h-5"
+                              />
+                            ) : (
+                              <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
+                                <Users className="w-3.5 h-3.5 text-muted-foreground" />
+                              </div>
+                            )}
 
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium">{option.label}</div>
-            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium">
+                                {option.label}
+                              </div>
+                            </div>
 
-            {isSelected && (
-              <div className="text-primary text-sm flex-shrink-0">✓</div>
-            )}
-          </button>
-        );
-      })}
-    </div>
-    <p className="text-xs text-muted-foreground mt-2">
-      This overrides the automatic star based on completed bounties.
-    </p>
-  </div>
-)}
+                            {isSelected && (
+                              <div className="text-primary text-sm flex-shrink-0">
+                                ✓
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      This overrides the automatic star based on completed
+                      bounties.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex justify-end gap-3">
                   <Button

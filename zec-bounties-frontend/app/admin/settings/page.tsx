@@ -78,6 +78,7 @@ import {
   Cpu,
   Search,
   MoreHorizontal,
+  Ban,
 } from "lucide-react";
 import { useBounty } from "@/lib/bounty-context";
 import type { ZcashParams, Team, RecoveryData } from "@/lib/types";
@@ -331,6 +332,7 @@ type Section =
   | "network"
   | "sync"
   | "team-hunter"
+  | "task-access"
   | "danger";
 
 const NAV: {
@@ -347,6 +349,13 @@ const NAV: {
     id: "team-hunter",
     label: "Team → Hunter",
     icon: ArrowRightLeft,
+    adminOnly: true,
+    group: "teams",
+  },
+  {
+    id: "task-access",
+    label: "Task access",
+    icon: Ban,
     adminOnly: true,
     group: "teams",
   },
@@ -884,6 +893,368 @@ function SyncPanel() {
           title="No sync data available"
           hint="Click Refresh to load the latest status."
         />
+      )}
+    </div>
+  );
+}
+
+const ALLOWED_TARGETS: Record<string, { value: string; label: string }[]> = {
+  TEAM: [
+    { value: "HUNTER", label: "Hunter" },
+    { value: "ADMIN", label: "Admin" },
+  ],
+  ADMIN: [{ value: "TEAM", label: "Team" }],
+};
+
+function RoleConversionPanel() {
+  const { currentUser, users, usersLoading, convertUserRole } = useBounty();
+  const { toast } = useToast();
+
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [targetRoles, setTargetRoles] = useState<Record<string, string>>({});
+  const [confirmTarget, setConfirmTarget] = useState<any | null>(null);
+  const [confirmToRole, setConfirmToRole] = useState<string | null>(null);
+
+  if (currentUser?.role !== "ADMIN") {
+    return (
+      <EmptyState
+        icon={Shield}
+        title="Admin access required"
+        hint="You don't have permission to convert user roles."
+      />
+    );
+  }
+
+  const convertibleUsers = (users ?? []).filter(
+    (u: any) => ALLOWED_TARGETS[u.role],
+  );
+
+  const openConfirm = (user: any) => {
+    const toRole =
+      targetRoles[user.id] ?? ALLOWED_TARGETS[user.role]?.[0]?.value;
+    if (!toRole) return;
+    setConfirmTarget(user);
+    setConfirmToRole(toRole);
+  };
+
+  const handleConvert = async () => {
+    if (!confirmTarget || !confirmToRole) return;
+    setPendingId(confirmTarget.id);
+    try {
+      await convertUserRole(confirmTarget.id, confirmToRole as any);
+      toast({
+        title: "Converted",
+        description: `${displayName(confirmTarget)} is now ${confirmToRole}.`,
+      });
+      setConfirmTarget(null);
+      setConfirmToRole(null);
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : "Conversion failed.",
+        variant: "destructive",
+      });
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  if (usersLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <RefreshCw className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (convertibleUsers.length === 0) {
+    return (
+      <EmptyState
+        icon={Users}
+        title="No convertible users"
+        hint="No users currently have the Team or Admin role."
+      />
+    );
+  }
+
+  const isTeamToHunter =
+    confirmTarget?.role === "TEAM" && confirmToRole === "HUNTER";
+
+  return (
+    <>
+      <div className="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
+        {convertibleUsers.map((user: any) => {
+          const options = ALLOWED_TARGETS[user.role] ?? [];
+          const selected = targetRoles[user.id] ?? options[0]?.value;
+          return (
+            <div
+              key={user.id}
+              className="flex items-center justify-between gap-3 px-4 py-3.5 flex-wrap"
+            >
+              <div className="min-w-0 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-violet-100 dark:bg-violet-950/50 flex items-center justify-center text-xs font-bold text-violet-700 dark:text-violet-300 shrink-0">
+                  {initials(displayName(user))}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-semibold truncate">
+                      {displayName(user)}
+                    </p>
+                    <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
+                      {user.role}
+                    </span>
+                    {user.isRobin && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 px-1.5 py-0.5 rounded-full">
+                        <Info className="w-2.5 h-2.5" />
+                        {/* isRobin · team kept */}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {user.email}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Select
+                  value={selected}
+                  onValueChange={(v) =>
+                    setTargetRoles((p) => ({ ...p, [user.id]: v }))
+                  }
+                >
+                  <SelectTrigger className="h-8 w-28 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {options.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs gap-1.5"
+                  onClick={() => openConfirm(user)}
+                  disabled={pendingId === user.id}
+                >
+                  {pendingId === user.id ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ArrowRightLeft className="w-3.5 h-3.5" />
+                  )}
+                  Convert
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <AlertDialog
+        open={!!confirmTarget}
+        onOpenChange={(open) => !open && setConfirmTarget(null)}
+      >
+        <AlertDialogContent className="w-full max-w-sm p-5">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-sm">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+              Convert role
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs">
+              {isTeamToHunter ? (
+                confirmTarget?.isRobin ? (
+                  <>
+                    Convert{" "}
+                    <span className="font-semibold text-foreground">
+                      {confirmTarget ? displayName(confirmTarget) : ""}
+                    </span>{" "}
+                    to Hunter? They're marked{" "}
+                    <span className="font-mono">isRobin</span>, so their team
+                    will <strong>not</strong> be deleted.
+                  </>
+                ) : (
+                  <>
+                    Convert{" "}
+                    <span className="font-semibold text-foreground">
+                      {confirmTarget ? displayName(confirmTarget) : ""}
+                    </span>{" "}
+                    to Hunter? Any team they created will be{" "}
+                    <strong>permanently deleted</strong>, including its wallet.
+                  </>
+                )
+              ) : (
+                <>
+                  Convert{" "}
+                  <span className="font-semibold text-foreground">
+                    {confirmTarget ? displayName(confirmTarget) : ""}
+                  </span>{" "}
+                  from {confirmTarget?.role} to {confirmToRole}?
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 mt-2">
+            <AlertDialogCancel
+              disabled={pendingId === confirmTarget?.id}
+              className="h-8 text-xs"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConvert}
+              disabled={pendingId === confirmTarget?.id}
+              className="h-8 text-xs"
+            >
+              {pendingId === confirmTarget?.id ? "Converting…" : "Convert"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+function TaskAccessPanel() {
+  const { currentUser, users, usersLoading, setUserTaskAccess } = useBounty();
+  const { toast } = useToast();
+  const [query, setQuery] = useState("");
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  const list = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (users ?? [])
+      .filter((u: any) => u.role !== "ADMIN")
+      .filter(
+        (u: any) =>
+          !q ||
+          displayName(u).toLowerCase().includes(q) ||
+          (u.email ?? "").toLowerCase().includes(q),
+      );
+  }, [users, query]);
+
+  const blockedCount = (users ?? []).filter(
+    (u: any) => u.canCreateTasks === false,
+  ).length;
+
+  if (currentUser?.role !== "ADMIN") {
+    return (
+      <EmptyState
+        icon={Shield}
+        title="Admin access required"
+        hint="You don't have permission to manage task access."
+      />
+    );
+  }
+
+  const toggle = async (user: any) => {
+    const allow = user.canCreateTasks === false; // blocked now → restore
+    setPendingId(user.id);
+    try {
+      await setUserTaskAccess(user.id, allow);
+      toast({
+        title: allow ? "Task creation restored" : "User blocked",
+        description: allow
+          ? `${displayName(user)} can create tasks again.`
+          : `${displayName(user)} can no longer create tasks.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : "Update failed.",
+        variant: "destructive",
+      });
+    } finally {
+      setPendingId(null);
+    }
+  };
+
+  if (usersLoading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <RefreshCw className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <Input
+            placeholder="Search users…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="h-8 text-xs pl-8"
+          />
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {blockedCount} blocked
+        </span>
+      </div>
+
+      {list.length === 0 ? (
+        <EmptyState
+          icon={Users}
+          title="No users found"
+          hint="Try a different search."
+        />
+      ) : (
+        <div className="rounded-xl border border-border bg-card divide-y divide-border overflow-hidden">
+          {list.map((user: any) => {
+            const blocked = user.canCreateTasks === false;
+            return (
+              <div
+                key={user.id}
+                className="flex items-center justify-between gap-3 px-4 py-3.5 flex-wrap"
+              >
+                <div className="min-w-0 flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">
+                    {initials(displayName(user))}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold truncate">
+                        {displayName(user)}
+                      </p>
+                      <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
+                        {user.role}
+                      </span>
+                      {blocked && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded-full">
+                          <Ban className="w-2.5 h-2.5" />
+                          Blocked
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {user.email}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant={blocked ? "outline" : "destructive"}
+                  size="sm"
+                  className="h-8 text-xs gap-1.5 shrink-0"
+                  onClick={() => toggle(user)}
+                  disabled={pendingId === user.id}
+                >
+                  {pendingId === user.id ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : blocked ? (
+                    <Unlock className="w-3.5 h-3.5" />
+                  ) : (
+                    <Ban className="w-3.5 h-3.5" />
+                  )}
+                  {blocked ? "Allow" : "Block"}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -1762,10 +2133,24 @@ export default function SettingsPage() {
       <div>
         <PageHeader
           icon={ArrowRightLeft}
-          title="Convert team users to hunter"
-          description="Change a user's role from Team to Hunter. Converting deletes any team they created and its wallet, unless they're marked isRobin."
+          title="Convert user role"
+          description="Convert Team members to Hunter or Admin, and Admins back to Team. Only Team → Hunter can delete a created team."
         />
-        <TeamToHunterPanel />
+        {/* <TeamToHunterPanel /> */}
+        <RoleConversionPanel />
+      </div>
+    );
+  }
+
+  function renderTaskAccess() {
+    return (
+      <div>
+        <PageHeader
+          icon={Ban}
+          title="Task access"
+          description="Block specific users from creating tasks. Their existing tasks are not affected."
+        />
+        <TaskAccessPanel />
       </div>
     );
   }
@@ -1835,6 +2220,7 @@ export default function SettingsPage() {
     network: renderNetwork,
     sync: renderSync,
     "team-hunter": renderTeamHunter,
+    "task-access": renderTaskAccess,
     danger: renderDanger,
   };
 

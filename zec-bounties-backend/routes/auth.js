@@ -3,16 +3,22 @@ const axios = require("axios");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma/client");
-const { authenticate, isAdmin } = require("../middleware/auth");
+const {
+  authenticate,
+  isAdmin,
+  signSessionToken,
+  loadAuthUser,
+} = require("../middleware/auth");
 const { verifyZaddress, verifyUaddress } = require("../helpers/db-query.js");
 const {
   getLatestZcashParams,
   getSystemWalletParams,
+  getWalletDataDir,
 } = require("../helpers/zcash/zcashHelper.js");
 const sendMail = require("../utils/sendMail");
 const executeZingoCliRecoveryInfo = require("../utils/zingo/zingoLibRecoveryInfo");
 const { delCache, deleteCacheByPattern } = require("../utils/cache");
-const { sendRealtimeUpdate } = require("../middleware/websocket");
+const { sendUserUpdated } = require("../middleware/websocket");
 
 const router = express.Router();
 const SECRET = process.env.JWT_SECRET;
@@ -20,6 +26,10 @@ const SECRET = process.env.JWT_SECRET;
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const DISCORD_REDIRECT_URI = `${process.env.BACKEND_URL || "http://localhost:5000"}/auth/discord/callback`;
 
 router.get("/github", (req, res) => {
   const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=user:email`;
@@ -123,16 +133,7 @@ router.get("/github/callback", async (req, res) => {
       });
     }
 
-    const token = jwt.sign(
-      {
-        id: user.id,
-        role: user.role,
-      },
-      SECRET,
-      {
-        expiresIn: "7d",
-      },
-    );
+    const token = signSessionToken(user);
 
     res.redirect(`${FRONTEND_URL}/auth/callback?token=${token}`);
   } catch (error) {
@@ -141,7 +142,136 @@ router.get("/github/callback", async (req, res) => {
   }
 });
 
-router.get("/verify", (req, res) => {
+// Step 1: authenticated user clicks "Connect Discord" — frontend navigates
+// here with their JWT as a query param (redirects can't carry headers).
+// We re-sign that identity into a short-lived state token so the callback
+// (a plain GET from Discord, no auth header either) knows who to attach to.
+router.get("/discord", (req, res) => {
+  const { token } = req.query;
+  if (!token) {
+    return res.redirect(`${FRONTEND_URL}/profile?discord=error`);
+  }
+
+  let userId;
+  try {
+    userId = jwt.verify(token, SECRET).id;
+  } catch {
+    return res.redirect(`${FRONTEND_URL}/profile?discord=error`);
+  }
+
+  const state = jwt.sign({ userId }, SECRET, { expiresIn: "10m" });
+
+  const params = new URLSearchParams({
+    client_id: DISCORD_CLIENT_ID,
+    redirect_uri: DISCORD_REDIRECT_URI,
+    response_type: "code",
+    scope: "identify",
+    state,
+  });
+
+  res.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
+});
+
+router.get("/discord/callback", async (req, res) => {
+  const { code, state, error } = req.query;
+
+  if (error || !code || !state) {
+    return res.redirect(`${FRONTEND_URL}/profile?discord=error`);
+  }
+
+  let userId;
+  try {
+    ({ userId } = jwt.verify(state, SECRET));
+  } catch {
+    return res.redirect(`${FRONTEND_URL}/profile?discord=expired`);
+  }
+
+  try {
+    const tokenResponse = await axios.post(
+      "https://discord.com/api/oauth2/token",
+      new URLSearchParams({
+        client_id: DISCORD_CLIENT_ID,
+        client_secret: DISCORD_CLIENT_SECRET,
+        grant_type: "authorization_code",
+        code,
+        redirect_uri: DISCORD_REDIRECT_URI,
+      }),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } },
+    );
+
+    const discordUser = await axios.get("https://discord.com/api/users/@me", {
+      headers: { Authorization: `Bearer ${tokenResponse.data.access_token}` },
+    });
+
+    const { id: discordUserId, username, global_name } = discordUser.data;
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        discordUserId,
+        discordUsername: username,
+        discordGlobalName: global_name || username,
+        discordConnectedAt: new Date(),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        discordUserId: true,
+        discordUsername: true,
+        discordGlobalName: true,
+        discordConnectedAt: true,
+      },
+    });
+
+    await delCache("users:all");
+    sendUserUpdated(userId, updated);
+
+    res.redirect(`${FRONTEND_URL}/profile?discord=success`);
+  } catch (err) {
+    if (err.code === "P2002") {
+      return res.redirect(`${FRONTEND_URL}/profile?discord=taken`);
+    }
+    console.error("Discord OAuth error:", err.message);
+    res.redirect(`${FRONTEND_URL}/profile?discord=error`);
+  }
+});
+
+// Disconnect
+router.delete("/discord", authenticate, async (req, res) => {
+  try {
+    const updated = await prisma.user.update({
+      where: { id: req.user.id },
+      data: {
+        discordUserId: null,
+        discordUsername: null,
+        discordGlobalName: null,
+        discordConnectedAt: null,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        discordUserId: true,
+        discordUsername: true,
+        discordGlobalName: true,
+        discordConnectedAt: true,
+      },
+    });
+
+    await delCache("users:all");
+    sendUserUpdated(req.user.id, updated);
+
+    res.json({ user: updated });
+  } catch (error) {
+    console.error("Failed to disconnect Discord:", error);
+    res.status(500).json({ error: "Failed to disconnect Discord" });
+  }
+});
+
+router.get("/verify", async (req, res) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
@@ -152,7 +282,11 @@ router.get("/verify", (req, res) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    return res.json({ user: decoded });
+    const user = await loadAuthUser(decoded.id);
+    if (!user) {
+      return res.status(401).json({ error: "User not found" });
+    }
+    return res.json({ user });
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
@@ -183,6 +317,8 @@ router.get("/me", async (req, res) => {
         UA_address: true,
         isRobin: true,
         emailNotifications: true,
+        discordUsername: true,
+        canCreateTasks: true,
       },
     });
 
@@ -221,12 +357,13 @@ router.patch("/update-email-notifications", authenticate, async (req, res) => {
         z_address: true,
         UA_address: true,
         emailNotifications: true,
+        canCreateTasks: true,
       },
     });
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -279,16 +416,23 @@ router.get("/has-zcash-params", authenticate, async (req, res) => {
 router.patch("/update-zaddress", authenticate, async (req, res) => {
   const { z_address } = req.body;
 
-  const validAddress = true;
-
-  if (!validAddress) {
-    return res.status(400).json({ error: "Invalid z_address" });
-  }
-
   try {
+    if (typeof z_address !== "string" || !z_address.trim()) {
+      return res.status(400).json({ error: "z_address is required" });
+    }
+
+    const isValid = await verifyZaddress(
+      z_address.trim(),
+      getSystemWalletParams(),
+    );
+
+    if (!isValid) {
+      return res.status(400).json({ error: "Invalid z_address" });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: { z_address },
+      data: { z_address: z_address.trim() },
       select: {
         id: true,
         email: true,
@@ -297,6 +441,8 @@ router.patch("/update-zaddress", authenticate, async (req, res) => {
         z_address: true,
       },
     });
+
+    await delCache("users:all");
 
     res.json({
       message: "Z-address updated successfully",
@@ -445,16 +591,27 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
 router.patch("/update-ua-address", authenticate, async (req, res) => {
   const { UA_address } = req.body;
 
-  if (!UA_address?.startsWith("u1")) {
-    return res.status(400).json({
-      error: "Invalid mainnet unified address",
-    });
-  }
-
   try {
+    if (typeof UA_address !== "string" || !UA_address.trim().startsWith("u1")) {
+      return res.status(400).json({
+        error: "Invalid mainnet unified address",
+      });
+    }
+
+    const isValid = await verifyUaddress(
+      UA_address.trim(),
+      getSystemWalletParams(),
+    );
+
+    if (!isValid) {
+      return res.status(400).json({
+        error: "Invalid mainnet unified address",
+      });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: { UA_address },
+      data: { UA_address: UA_address.trim() },
       select: {
         id: true,
         email: true,
@@ -464,11 +621,14 @@ router.patch("/update-ua-address", authenticate, async (req, res) => {
       },
     });
 
+    await delCache("users:all");
+
     res.json({
       message: "Mainnet address updated",
       user: updatedUser,
     });
   } catch (error) {
+    console.error("Error updating UA_address:", error);
     res.status(500).json({
       error: "Failed to update UA_address",
     });
@@ -533,7 +693,7 @@ router.patch("/update-nickname", authenticate, async (req, res) => {
       deleteCacheByPattern("submissions:*"),
     ]);
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -582,9 +742,11 @@ router.patch("/select-role", authenticate, async (req, res) => {
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
-    res.json({ user: updated });
+    const token = signSessionToken(updated);
+
+    res.json({ user: updated, token });
   } catch (error) {
     console.error("Failed to select role:", error);
     res.status(500).json({
