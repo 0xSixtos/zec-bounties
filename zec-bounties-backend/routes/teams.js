@@ -49,6 +49,8 @@ const {
   invalidateBounty,
   ONBOARDED_ROLES,
   requireOnboarded,
+  createBountyWithQuota,
+  WeeklyBountyQuotaError,
   getWeeklyBountyQuota,
   requireTaskCreation,
 } = require("../utils/bountyHelpers");
@@ -751,6 +753,14 @@ router.post(
 
       const { teamId } = req.params;
 
+    if (req.user.role !== "ADMIN") {
+      const membership = await getTeamMember(teamId, req.user.id);
+      if (!membership) {
+        return res
+          .status(403)
+          .json({ error: "You are not a member of this team" });
+      }
+    }
       const team = await prisma.team.findUnique({ where: { id: teamId } });
       if (!team) return res.status(404).json({ error: "Team not found" });
 
@@ -924,17 +934,20 @@ router.post(
                 }),
               ),
             ),
-          ]);
-        } catch (notificationErr) {
-          console.error("Team bounty notification failed:", notificationErr);
-        }
-      })();
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: "Failed to create bounty" });
+          ),
+        ]);
+      } catch (notificationErr) {
+        console.error("Team bounty notification failed:", notificationErr);
+      }
+    })();
+  } catch (err) {
+    if (err instanceof WeeklyBountyQuotaError) {
+      return res.status(429).json({ error: err.message, ...err.quota });
     }
-  },
-);
+    console.error(err);
+    res.status(500).json({ error: "Failed to create bounty" });
+  }
+});
 
 // ─── Favorites ───────────────────────────────────────────────────────────────
 
