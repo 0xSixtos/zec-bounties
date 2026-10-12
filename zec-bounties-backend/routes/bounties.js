@@ -294,6 +294,11 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         ? assignee
         : null;
 
+    // Non-admins stay unapproved until review. Hunter suggestions are
+    // unapproved even when aimed at a team.
+    const resolvedIsApproved =
+      req.user.role === "ADMIN" || (team !== null && !isHunter);
+
     const bounty = await createBountyWithQuota(req.user, {
       data: {
         title,

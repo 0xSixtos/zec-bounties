@@ -62,6 +62,7 @@ function loadRoutes(prisma) {
     "../utils/discord/discordAssignWebhook": { notifyAssignment: noOp },
     "../utils/constants": { REQUIRED_TEAM_VERIFICATIONS: 3 },
     "../helpers/validateBounty": require("../../helpers/validateBounty"),
+"../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
     "../utils/userSelects": require("../../utils/userSelects"),
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../utils/bountyHelpers": helpers,
