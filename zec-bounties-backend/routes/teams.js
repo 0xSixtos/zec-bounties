@@ -2,8 +2,6 @@ const express = require("express");
 const { PrismaClient } = require("@prisma/client");
 const path = require("path");
 const { promises: fs } = require("fs");
-const { authenticate, optionalAuthenticate } = require("../middleware/auth");
-const { isSettableMemberRole } = require("../helpers/teamRoles");
 const {
   authenticate,
   optionalAuthenticate,
