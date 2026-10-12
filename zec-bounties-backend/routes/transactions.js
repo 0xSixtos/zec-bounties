@@ -404,8 +404,7 @@ router.post("/authorize-payment", authenticate, isAdmin, async (req, res) => {
     // The panel reads txids for its "Payment sent — tx …" toast.
     res.json({
       success: true,
-      result: txResult,
-      txids: sendResult.txids || (txid ? [txid] : []),
+      txids: sendResult.txids,
       batchKey,
       paidCount: payableIds.length,
       skipped,
