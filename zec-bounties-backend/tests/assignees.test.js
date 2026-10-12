@@ -71,6 +71,7 @@ function useFakeDb(assigneeIds, status = "IN_PROGRESS") {
     workSubmissions: [],
     assignees: db.rows.map(withUser),
   });
+  prisma.bounty.findUniqueOrThrow = async () => db.bounty;
   prisma.bounty.update = async ({ data }) => Object.assign(db.bounty, data);
   prisma.bounty.updateMany = async ({ where, data }) => {
     const current = db.bounty.assignee;
@@ -101,6 +102,7 @@ function useFakeDb(assigneeIds, status = "IN_PROGRESS") {
   };
   prisma.bountyActivity.create = async () => null;
   prisma.user.findMany = async () => [];
+  prisma.$queryRaw = async () => [{ id: "b1" }];
   prisma.$transaction = async (arg) =>
     typeof arg === "function" ? arg(prisma) : Promise.all(arg);
   return db;
