@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { useBounty } from "@/lib/bounty-context";
 import type { BountyFormData } from "@/lib/types";
+import { Loader2, Plus, Clock, Tag, AlignLeft, Users } from "lucide-react";
 import { Loader2, Plus, Clock, Tag, AlignLeft, Ban } from "lucide-react";
 import { SiZcash } from "react-icons/si";
 import { toast } from "sonner";
@@ -42,6 +43,7 @@ type FieldErrors = {
   category?: string;
   reward?: string;
   description?: string;
+  team?: string;
 };
 
 export function NewBountyModal({
@@ -56,6 +58,8 @@ export function NewBountyModal({
     categories,
     bountyQuota,
     fetchBountyQuota,
+    communities,
+    fetchCommunities,
   } = useBounty();
 
   const [formData, setFormData] = useState({
@@ -64,6 +68,7 @@ export function NewBountyModal({
     bountyAmount: 0,
     timeToComplete: new Date(),
     category: "",
+    teamId: "",
     targetRepo: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -83,10 +88,12 @@ export function NewBountyModal({
   };
 
   useEffect(() => {
-    if (open) fetchBountyQuota();
-  }, [open]);
-
+    if (!open) return;
+    fetchBountyQuota();
+    if (currentUser?.role === "HUNTER") fetchCommunities();
+  }, [open, currentUser?.role]);
   const isAdmin = currentUser?.role === "ADMIN";
+  const isHunter = currentUser?.role === "HUNTER";
   const blocked = currentUser?.canCreateTasks === false;
   const atLimit =
     !isAdmin && bountyQuota?.remaining !== null && bountyQuota?.remaining === 0;
@@ -118,6 +125,10 @@ export function NewBountyModal({
       nextErrors.category = "Select a category.";
     }
 
+    if (isHunter && !formData.teamId) {
+      nextErrors.team = "Choose the team this suggestion is for.";
+    }
+
     if (!formData.bountyAmount || formData.bountyAmount <= 0) {
       nextErrors.reward = "Enter a reward amount greater than 0.";
     }
@@ -129,7 +140,7 @@ export function NewBountyModal({
     setFieldErrors(nextErrors);
 
     const firstInvalid = (
-      ["title", "category", "reward", "description"] as (keyof FieldErrors)[]
+      ["title", "team", "category", "reward", "description"] as (keyof FieldErrors)[]
     ).find((field) => Boolean(nextErrors[field]));
 
     if (firstInvalid) {
@@ -155,9 +166,14 @@ export function NewBountyModal({
 
     setIsSubmitting(true);
     try {
-      await createBounty(formData);
-      toast.success("Bounty created!", {
-        description: `"${formData.title}" is now live.`,
+      await createBounty({
+        ...formData,
+        ...(isHunter ? { teamId: formData.teamId } : {}),
+      });
+      toast.success(isHunter ? "Suggestion sent" : "Bounty created!", {
+        description: isHunter
+          ? `"${formData.title}" was sent to the selected team for review.`
+          : `"${formData.title}" is now live.`,
       });
       onSuccess?.();
       setFormData({
@@ -166,6 +182,7 @@ export function NewBountyModal({
         bountyAmount: 0,
         timeToComplete: new Date(),
         category: "",
+        teamId: "",
     targetRepo: "",
       });
     } catch (error: any) {
@@ -291,6 +308,37 @@ export function NewBountyModal({
                 </p>
               )}
             </div>
+
+            {/* Category + Reward */}
+            {isHunter && (
+              <div className="space-y-2">
+                <Label htmlFor="team" className="flex items-center gap-2 text-sm font-medium">
+                  <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                  Team
+                </Label>
+                <Select
+                  value={formData.teamId}
+                  onValueChange={(teamId) => {
+                    setFormData((prev) => ({ ...prev, teamId }));
+                    clearFieldError("team");
+                  }}
+                >
+                  <SelectTrigger id="team" className="h-11 rounded-xl" aria-invalid={Boolean(fieldErrors.team)}>
+                    <SelectValue placeholder="Choose a verified team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {communities.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {fieldErrors.team && (
+                  <p className="text-sm text-destructive">{fieldErrors.team}</p>
+                )}
+              </div>
+            )}
 
             {/* Category + Reward */}
             <div className="grid grid-cols-1 gap-5 imd:grid-cols-2">
