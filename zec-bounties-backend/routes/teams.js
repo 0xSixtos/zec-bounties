@@ -934,7 +934,6 @@ router.post(
                 }),
               ),
             ),
-          ),
         ]);
       } catch (notificationErr) {
         console.error("Team bounty notification failed:", notificationErr);
