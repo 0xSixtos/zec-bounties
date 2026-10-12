@@ -1099,6 +1099,7 @@ router.post("/:id/submit", authenticate, async (req, res) => {
         id: true,
         isApproved: true,
         status: true,
+        assignee: true,
         workSubmissions: {
           where: {
             submittedBy: userId,
@@ -1111,10 +1112,12 @@ router.post("/:id/submit", authenticate, async (req, res) => {
 
     if (!bounty) return res.status(404).json({ error: "Bounty not found" });
 
-    const isAssigned = await prisma.bountyAssignee.findUnique({
-      where: { bountyId_userId: { bountyId, userId } },
-      select: { userId: true },
-    });
+    const isAssigned =
+      bounty.assignee === userId ||
+      !!(await prisma.bountyAssignee.findUnique({
+        where: { bountyId_userId: { bountyId, userId } },
+        select: { userId: true },
+      }));
     if (!isAssigned)
       return res
         .status(403)
@@ -1233,7 +1236,7 @@ router.get("/:id/submissions", authenticate, async (req, res) => {
 
     const bounty = await prisma.bounty.findUnique({
       where: { id: bountyId },
-      select: { id: true, createdBy: true },
+      select: { id: true, createdBy: true, assignee: true },
     });
     if (!bounty) return res.status(404).json({ error: "Bounty not found" });
 
@@ -1242,11 +1245,12 @@ router.get("/:id/submissions", authenticate, async (req, res) => {
 
     let isAssignee = false;
     if (!isCreatorOrAdmin) {
-      const assignee = await prisma.bountyAssignee.findUnique({
-        where: { bountyId_userId: { bountyId, userId } },
-        select: { userId: true },
-      });
-      isAssignee = !!assignee;
+      isAssignee =
+        bounty.assignee === userId ||
+        !!(await prisma.bountyAssignee.findUnique({
+          where: { bountyId_userId: { bountyId, userId } },
+          select: { userId: true },
+        }));
     }
 
     if (!isCreatorOrAdmin && !isAssignee) {
