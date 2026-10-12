@@ -1,9 +1,25 @@
-const { execSync } = require("child_process");
+const { execFile } = require("child_process");
 const { existsSync } = require("fs");
+const { promisify } = require("util");
+const { isSafeShieldedAddress } = require("../../helpers/validateAddress.js");
+
+const { ADDRESS_PATTERN } = require("./replCommand");
+
+const execFileAsync = promisify(execFile);
+const PARSE_TIMEOUT_MS = 15000;
 
 async function executeZingoParseAddress(zaddress, params) {
   const command = "parse_address";
   if (!zaddress) throw new Error("No zaddress provided");
+  if (typeof zaddress !== "string" || !ADDRESS_PATTERN.test(zaddress)) {
+    return { status: "invalid" };
+  }
+
+  // Sink-level guard: never let a value that isn't a plain base58/bech32
+  // address reach the wallet CLI, regardless of what the caller validated.
+  if (!isSafeShieldedAddress(zaddress)) {
+    throw new Error("Invalid address");
+  }
 
   const zingoPath = process.env.ZINGO_CLI;
 
@@ -11,21 +27,26 @@ async function executeZingoParseAddress(zaddress, params) {
     throw new Error(`zingo-cli not found at ${zingoPath}`);
   }
 
+  // Pass each token as a separate argv element and run the binary directly
+  // (execFileSync does NOT spawn a shell), so nothing in `zaddress` can be
+  // interpreted as shell syntax.
   const args = [
-    `--chain ${params.chain || "testnet"}`,
-    `--server ${params.serverUrl || "https://testnet.zec.rocks:443"}`,
-    `--data-dir "${params.dataDir || "/error"}"`,
+    "--chain",
+    params.chain || "testnet",
+    "--server",
+    params.serverUrl || "https://testnet.zec.rocks:443",
+    "--data-dir",
+    params.dataDir || "/error",
     command,
     zaddress,
-  ].join(" ");
-
-  console.log(args);
+  ];
 
   try {
     // 1️⃣ Run CLI and capture full output
-    const rawOutput = execSync(`${zingoPath} ${args}`, {
-      stdio: "pipe",
-    }).toString();
+    const { stdout: rawOutput } = await execFileAsync(zingoPath, args, {
+      encoding: "utf8",
+      timeout: PARSE_TIMEOUT_MS,
+    });
 
     // 2️⃣ Strip ANSI color codes
     const noAnsi = rawOutput.replace(/\u001b\[[0-9;]*m/g, "");
@@ -45,7 +66,6 @@ async function executeZingoParseAddress(zaddress, params) {
       .filter(Boolean);
 
     // 5️⃣ Return array if >1 objects, or object if just 1
-    console.log("resultz", parsed);
     if (parsed.length === 1) return parsed[0];
     return parsed;
   } catch (error) {

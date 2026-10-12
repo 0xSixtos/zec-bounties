@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { Bounty, WorkSubmission, User } from "@/lib/types";
 import {
   Dialog,
@@ -125,6 +126,7 @@ export function BountyDetailModal({
 
   const canSubmitWork =
     isAssignedToCurrentUser &&
+    bounty.isApproved &&
     !hasCurrentUserSubmitted &&
     !submissionsLoading &&
     bounty.status !== "TO_DO" &&
@@ -142,7 +144,7 @@ export function BountyDetailModal({
   const hasApplied = !!userApplication;
 
   const notice: Notice | null = (() => {
-    if (isAssignedToCurrentUser && bounty.status === "TO_DO") {
+    if (isAssignedToCurrentUser && (!bounty.isApproved || bounty.status === "TO_DO")) {
       return {
         type: "warning",
         title: "Bounty not yet approved",
@@ -201,7 +203,7 @@ export function BountyDetailModal({
       toast.success("Application submitted successfully!");
     } catch (error) {
       console.error("Failed to apply:", error);
-      toast.error("Failed to submit application");
+      toast.error(getErrorMessage(error, "Failed to submit application"));
     } finally {
       setIsApplying(false);
     }
@@ -231,7 +233,7 @@ export function BountyDetailModal({
       toast.success("Work submitted successfully!");
     } catch (error) {
       console.error("Failed to submit work:", error);
-      toast.error("Failed to submit work");
+      toast.error(getErrorMessage(error, "Failed to submit work"));
     } finally {
       setIsSubmitting(false);
     }
