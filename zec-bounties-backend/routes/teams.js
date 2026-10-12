@@ -771,83 +771,78 @@ router.post(
         });
       }
 
+        const {
+      title,
+      description,
+      bountyAmount,
+      timeToComplete,
+      assignee,
+      categoryId,
+      chain,
+      targetRepo,
+    } = req.body;
+
     const validation = validateBountyCreate(req.body);
     if (!validation.valid) return res.status(400).json({ error: validation.error });
     const categoryValidation = await validateCategory(prisma, categoryId);
     if (!categoryValidation.valid) {
       return res.status(400).json({ error: categoryValidation.error });
     }
-
     if (chain && !["MAIN", "TEST"].includes(chain)) {
       return res.status(400).json({ error: "Invalid chain value" });
     }
-      if (req.user.role !== "ADMIN") {
-        const membership = await getTeamMember(teamId, req.user.id);
-        if (!membership) {
-          return res
-            .status(403)
-            .json({ error: "You are not a member of this team" });
-        }
 
-        // Same weekly cap as the general marketplace create route.
-        const quota = await getWeeklyBountyQuota(req.user.id);
-        if (quota.remaining <= 0) {
-          return res.status(429).json({
-            error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
-            ...quota,
-          });
-        }
+    if (req.user.role !== "ADMIN") {
+      const membership = await getTeamMember(teamId, req.user.id);
+      if (!membership) {
+        return res
+          .status(403)
+          .json({ error: "You are not a member of this team" });
       }
+      const quota = await getWeeklyBountyQuota(req.user.id);
+      if (quota.remaining <= 0) {
+        return res.status(429).json({
+          error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
+          ...quota,
+        });
+      }
+    }
 
-      const {
+    const TARGET_REPOS = new Set([
+      "namada",
+      "zechub",
+      "zechub-wiki",
+      "zec-bounties",
+    ]);
+    if (
+      targetRepo != null &&
+      targetRepo !== "" &&
+      !TARGET_REPOS.has(targetRepo)
+    ) {
+      return res.status(400).json({ error: "Invalid targetRepo" });
+    }
+
+    const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
+    const resolvedAssignee =
+      canAssignOthers && assignee !== "none" ? assignee : null;
+    const bounty = await prisma.bounty.create({
+      data: {
         title,
         description,
-        bountyAmount,
-        timeToComplete,
-        assignee,
-        categoryId,
-        chain,
-        targetRepo,
-      } = req.body;
-      const TARGET_REPOS = new Set([
-        "namada",
-        "zechub",
-        "zechub-wiki",
-        "zec-bounties",
-      ]);
-      if (
-        targetRepo != null &&
-        targetRepo !== "" &&
-        !TARGET_REPOS.has(targetRepo)
-      ) {
-        return res.status(400).json({ error: "Invalid targetRepo" });
-      }
-      if (chain && !["MAIN", "TEST"].includes(chain)) {
-        return res.status(400).json({ error: "Invalid chain value" });
-      }
-      // Team bounties are always pre-approved — matches the frontend's
-      // existing isApproved: true whenever a teamId is set.
-      const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
-      const resolvedAssignee =
-        canAssignOthers && assignee !== "none" ? assignee : null;
-      const bounty = await prisma.bounty.create({
-        data: {
-          title,
-          description,
-          bountyAmount: parseFloat(bountyAmount),
-          timeToComplete: new Date(timeToComplete),
-          createdBy: req.user.id,
-          assignee: resolvedAssignee,
-          isApproved: true,
-          categoryId: categoryId || null,
-          ...(chain && { chain }),
-          ...(targetRepo && { targetRepo }),
-          teamId,
-          isPrivate: team.isPrivate,
-          ...(resolvedAssignee && {
-            assignees: { create: { userId: resolvedAssignee } },
-          }),
-        },
+        bountyAmount: parseFloat(bountyAmount),
+        timeToComplete: new Date(timeToComplete),
+        createdBy: req.user.id,
+        assignee: resolvedAssignee,
+        isApproved: true,
+        categoryId: categoryId || null,
+        ...(chain && { chain }),
+        ...(targetRepo && { targetRepo }),
+        teamId,
+        isPrivate: team.isPrivate,
+        ...(resolvedAssignee && {
+          assignees: { create: { userId: resolvedAssignee } },
+        }),
+      },
         include: {
           createdByUser: {
             select: {
