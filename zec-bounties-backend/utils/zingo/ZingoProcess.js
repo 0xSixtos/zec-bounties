@@ -1,5 +1,10 @@
 const { spawn } = require("child_process");
 const { existsSync } = require("fs");
+const {
+  assertFixedCommand,
+  parseAddressLine,
+  quicksendLine,
+} = require("./replCommand");
 
 function extractJson(text) {
   let start = text.indexOf("{");
@@ -317,7 +322,7 @@ class ZingoProcess {
       this.proc.stderr.on("data", onError);
       this.proc.on("close", onClose);
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
   }
 
@@ -360,7 +365,7 @@ class ZingoProcess {
       this.proc.stdout.on("data", onData);
       this.proc.stderr.on("data", onError);
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
   }
 
@@ -368,7 +373,7 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       const startBufferLen = this.buffer.length;
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
 
       const check = () => {
         const chunk = this.buffer.slice(startBufferLen);
@@ -414,7 +419,7 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       const startBufferLen = this.buffer.length;
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
 
       const check = () => {
         const chunk = this.buffer.slice(startBufferLen);
@@ -491,7 +496,7 @@ class ZingoProcess {
       this.proc.stdout.on("data", onData);
       this.proc.stderr.on("data", onError);
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
   }
 
@@ -501,16 +506,15 @@ class ZingoProcess {
         reject(new Error("No zaddress provided"));
         return;
       }
-      // Reject control characters — the address is written to stdin as a
-      // single line; a raw newline would let it be interpreted as a
-      // second, attacker-chosen command by the zingo-cli REPL.
-      if (/[\r\n]/.test(zaddress)) {
-        reject(new Error("Invalid address"));
+      let command;
+      try {
+        command = parseAddressLine(zaddress);
+      } catch (err) {
+        reject(err);
         return;
       }
 
       const startBufferLen = this.buffer.length;
-      const command = `parse_address ${zaddress}`;
       this.proc.stdin.write(command + "\n");
 
       const check = () => {
@@ -712,7 +716,7 @@ class ZingoProcess {
       this.proc.stdout.on("data", onData);
       this.proc.stderr.on("data", onError);
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
   }
 
@@ -754,7 +758,7 @@ class ZingoProcess {
       this.proc.stdout.on("data", onData);
       this.proc.stderr.on("data", onError);
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
   }
 
@@ -812,7 +816,7 @@ class ZingoProcess {
       this.proc.stdout.on("data", onData);
       this.proc.stderr.on("data", onError);
 
-      this.proc.stdin.write(command + "\n");
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
   }
 
