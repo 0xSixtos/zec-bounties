@@ -1,10 +1,18 @@
-const { execFileSync } = require("child_process");
+const { execFile } = require("child_process");
 const { existsSync } = require("fs");
-const { isSafeShieldedAddress } = require("../../helpers/validateAddress.js");
+const { promisify } = require("util");
+
+const { ADDRESS_PATTERN } = require("./replCommand");
+
+const execFileAsync = promisify(execFile);
+const PARSE_TIMEOUT_MS = 15000;
 
 async function executeZingoParseAddress(zaddress, params) {
   const command = "parse_address";
   if (!zaddress) throw new Error("No zaddress provided");
+  if (typeof zaddress !== "string" || !ADDRESS_PATTERN.test(zaddress)) {
+    return { status: "invalid" };
+  }
 
   // Sink-level guard: never let a value that isn't a plain base58/bech32
   // address reach the wallet CLI, regardless of what the caller validated.
@@ -32,13 +40,12 @@ async function executeZingoParseAddress(zaddress, params) {
     zaddress,
   ];
 
-  console.log(args.join(" "));
-
   try {
     // 1️⃣ Run CLI and capture full output
-    const rawOutput = execFileSync(zingoPath, args, {
-      stdio: "pipe",
-    }).toString();
+    const { stdout: rawOutput } = await execFileAsync(zingoPath, args, {
+      encoding: "utf8",
+      timeout: PARSE_TIMEOUT_MS,
+    });
 
     // 2️⃣ Strip ANSI color codes
     const noAnsi = rawOutput.replace(/\u001b\[[0-9;]*m/g, "");
@@ -58,7 +65,6 @@ async function executeZingoParseAddress(zaddress, params) {
       .filter(Boolean);
 
     // 5️⃣ Return array if >1 objects, or object if just 1
-    console.log("resultz", parsed);
     if (parsed.length === 1) return parsed[0];
     return parsed;
   } catch (error) {

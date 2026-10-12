@@ -3,17 +3,23 @@ const axios = require("axios");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma/client");
-const { authenticate, isAdmin, signSessionToken, loadAuthUser } = require("../middleware/auth");
+const {
+  authenticate,
+  isAdmin,
+  signSessionToken,
+  loadAuthUser,
+} = require("../middleware/auth");
 const { verifyZaddress, verifyUaddress } = require("../helpers/db-query.js");
 const { isSafeShieldedAddress } = require("../helpers/validateAddress.js");
 const {
   getLatestZcashParams,
   getSystemWalletParams,
+  getWalletDataDir,
 } = require("../helpers/zcash/zcashHelper.js");
 const sendMail = require("../utils/sendMail");
 const executeZingoCliRecoveryInfo = require("../utils/zingo/zingoLibRecoveryInfo");
 const { delCache, deleteCacheByPattern } = require("../utils/cache");
-const { sendRealtimeUpdate } = require("../middleware/websocket");
+const { sendUserUpdated } = require("../middleware/websocket");
 
 const router = express.Router();
 const SECRET = process.env.JWT_SECRET;
@@ -221,7 +227,7 @@ router.get("/discord/callback", async (req, res) => {
     });
 
     await delCache("users:all");
-    sendRealtimeUpdate("user_updated", updated, userId);
+    sendUserUpdated(userId, updated);
 
     res.redirect(`${FRONTEND_URL}/profile?discord=success`);
   } catch (err) {
@@ -257,7 +263,7 @@ router.delete("/discord", authenticate, async (req, res) => {
     });
 
     await delCache("users:all");
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -313,6 +319,7 @@ router.get("/me", async (req, res) => {
         isRobin: true,
         emailNotifications: true,
         discordUsername: true,
+        canCreateTasks: true,
       },
     });
 
@@ -351,12 +358,13 @@ router.patch("/update-email-notifications", authenticate, async (req, res) => {
         z_address: true,
         UA_address: true,
         emailNotifications: true,
+        canCreateTasks: true,
       },
     });
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -423,7 +431,7 @@ router.get("/has-zcash-params", authenticate, async (req, res) => {
 router.patch("/update-zaddress", authenticate, async (req, res) => {
   const { z_address } = req.body;
 
-  // Validate before storing. This value is later used as a payout destination
+ // Validate before storing. This value is later used as a payout destination
   // and interpolated into the zingo-cli send command, so it must contain only
   // the base58/bech32 characters a real Zcash address uses — no quotes,
   // whitespace or control characters that could break out of that command.
@@ -438,9 +446,22 @@ router.patch("/update-zaddress", authenticate, async (req, res) => {
   }
 
   try {
+    if (typeof z_address !== "string" || !z_address.trim()) {
+      return res.status(400).json({ error: "z_address is required" });
+    }
+
+    const isValid = await verifyZaddress(
+      z_address.trim(),
+      getSystemWalletParams(),
+    );
+
+    if (!isValid) {
+      return res.status(400).json({ error: "Invalid z_address" });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: { z_address },
+      data: { z_address: z_address.trim() },
       select: {
         id: true,
         email: true,
@@ -449,6 +470,8 @@ router.patch("/update-zaddress", authenticate, async (req, res) => {
         z_address: true,
       },
     });
+
+    await delCache("users:all");
 
     res.json({
       message: "Z-address updated successfully",
@@ -611,9 +634,26 @@ router.patch("/update-ua-address", authenticate, async (req, res) => {
   }
 
   try {
+    if (typeof UA_address !== "string" || !UA_address.trim().startsWith("u1")) {
+      return res.status(400).json({
+        error: "Invalid mainnet unified address",
+      });
+    }
+
+    const isValid = await verifyUaddress(
+      UA_address.trim(),
+      getSystemWalletParams(),
+    );
+
+    if (!isValid) {
+      return res.status(400).json({
+        error: "Invalid mainnet unified address",
+      });
+    }
+
     const updatedUser = await prisma.user.update({
       where: { id: req.user.id },
-      data: { UA_address },
+      data: { UA_address: UA_address.trim() },
       select: {
         id: true,
         email: true,
@@ -623,11 +663,14 @@ router.patch("/update-ua-address", authenticate, async (req, res) => {
       },
     });
 
+    await delCache("users:all");
+
     res.json({
       message: "Mainnet address updated",
       user: updatedUser,
     });
   } catch (error) {
+    console.error("Error updating UA_address:", error);
     res.status(500).json({
       error: "Failed to update UA_address",
     });
@@ -692,7 +735,7 @@ router.patch("/update-nickname", authenticate, async (req, res) => {
       deleteCacheByPattern("submissions:*"),
     ]);
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -741,7 +784,7 @@ router.patch("/select-role", authenticate, async (req, res) => {
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     const token = signSessionToken(updated);
 
