@@ -314,11 +314,11 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         }),
       },
       include: {
-        createdByUser: { select: USER_SELECT_WITH_ROLE },
-        assignees: { include: { user: { select: USER_SELECT } } },
-        assigneeUser: { select: USER_SELECT_FULL },
-        team: { select: { id: true, name: true, logo: true } },
-      },
+  createdByUser: { select: USER_SELECT },
+  assignees: { include: { user: { select: USER_SELECT } } },
+  assigneeUser: { select: USER_SELECT },
+  team: { select: { id: true, name: true, logo: true } },
+},
     });
 
     const recipients = await getBroadcastRecipients(bounty);
