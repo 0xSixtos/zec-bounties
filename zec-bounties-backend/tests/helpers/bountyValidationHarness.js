@@ -13,7 +13,7 @@ function loadModule(relativePath, dependencies, DateClass = Date) {
       throw new Error(`Unexpected dependency: ${name}`);
     },
     process: { env: { NODE_ENV: "production" } },
-    console: { log() {}, error() {} },
+    console: { log(...a) { process.stdout.write(a.join(" ") + "\n"); }, error(...a) { process.stderr.write(a.join(" ") + "\n"); } },
     Date: DateClass,
     setTimeout,
   }, { filename });
@@ -39,6 +39,7 @@ function loadRoutes(prisma) {
   const effects = { broadcasts: [], invalidations: 0, discord: [] };
   const noOp = async () => {};
   const helpers = loadHelpers(prisma);
+  helpers.broadcastBountyEvent = (...args) => effects.broadcasts.push(args);
   const cache = {
     getCache: async () => [],
     bumpVersion: async () => { effects.invalidations++; },
@@ -54,8 +55,8 @@ function loadRoutes(prisma) {
     "../utils/sendMail": noOp,
     "../utils/notifyUser": noOp,
     "../utils/bountyActivity": {
-      recordActivity: async () => {},
-      createActivity: async () => {},
+      logActivity: async () => {},
+      publishActivity: async () => {},
     },
     "../utils/discord/discordNotify": { notifyNewBounty: (bounty) => effects.discord.push(bounty.id) },
     "../utils/discord/discordAssignWebhook": { notifyAssignment: noOp },

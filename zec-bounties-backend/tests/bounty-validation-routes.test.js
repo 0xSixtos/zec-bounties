@@ -1,17 +1,15 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { loadRoutes } = require("./helpers/bountyValidationHarness");
-
 const valid = {
   title: "Validation fixture", description: "A complete local regression fixture.",
   bountyAmount: 0.01, timeToComplete: "2099-01-01T00:00:00.000Z",
   categoryId: "Development", assignee: "none", chain: "MAIN",
 };
-
 function fixture() {
   const bounty = { id: "b1", ...valid, createdBy: "owner", teamId: null, status: "TO_DO" };
   const writes = [];
-  const db = {
+  const real = {
     bounty: {
       findUnique: async () => ({ ...bounty }),
       create: async ({ data }) => {
@@ -21,12 +19,19 @@ function fixture() {
       update: async ({ data }) => { writes.push(data); Object.assign(bounty, data); return { ...bounty }; },
     },
     bountyCategory: { findUnique: async ({ where }) => where.name === "Development" ? { name: where.name } : null },
+    bountyActivity: { create: async () => ({ id: "act1" }) },
     team: { findUnique: async () => ({ id: "team1", name: "Fixture", isVerified: true, isPrivate: false }) },
     teamMember: { findUnique: async () => null },
+    $transaction: async (fn) => (typeof fn === "function" ? fn(db) : Promise.all(fn)),
   };
+  const db = new Proxy(real, {
+    get(target, prop) {
+      if (!(prop in target)) console.log("MISSING PRISMA:", prop);
+      return target[prop];
+    },
+  });
   return { ...loadRoutes(db), bounty, writes };
 }
-
 const invalid = [
   ["negative reward", { bountyAmount: -1 }],
   ["zero reward", { bountyAmount: 0 }],
@@ -42,7 +47,6 @@ const invalid = [
   ["unknown category", { categoryId: "Missing category" }],
   ["non-string category", { categoryId: { name: "Development" } }],
 ];
-
 for (const route of ["create", "team", "edit"]) {
   for (const [label, fields] of invalid) {
     test(`${route}: rejects ${label} before writes or notifications`, async () => {
@@ -59,13 +63,13 @@ for (const route of ["create", "team", "edit"]) {
   test(`${route}: accepts and normalizes a valid numeric reward`, async () => {
     const h = fixture();
     const res = await h.request(route, { ...valid, bountyAmount: "1.25" });
+    console.log(route, res.statusCode, res.body);
     assert.equal(res.statusCode, route === "edit" ? 200 : 201);
     assert.equal(h.writes[0].bountyAmount, 1.25);
     assert.equal(new Date(h.writes[0].timeToComplete).toISOString(), valid.timeToComplete);
     assert.equal(h.effects.broadcasts.length, 1);
   });
 }
-
 test("an edit can change only the reward after the original deadline has passed", async () => {
   const h = fixture();
   h.bounty.timeToComplete = "2000-01-01";
@@ -74,7 +78,6 @@ test("an edit can change only the reward after the original deadline has passed"
   assert.equal(h.bounty.bountyAmount, 2);
   assert.equal(h.bounty.timeToComplete, "2000-01-01");
 });
-
 test("edit permission is checked before invalid input is examined", async () => {
   const h = fixture();
   const res = await h.request("edit", { bountyAmount: -1 }, { user: { id: "stranger", role: "HUNTER" } });
