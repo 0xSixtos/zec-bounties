@@ -250,15 +250,6 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
       return res.status(400).json({ error: "Invalid targetRepo" });
     }
 
-    // Only admins may create a pre-approved bounty. Non-admin callers'
-    // isApproved value is ignored outright, mirroring the guard on PUT /:id.
-    const resolvedIsApproved =
-      req.user.role === "ADMIN"
-        ? isApproved !== undefined
-          ? !!isApproved
-          : true
-        : false;
-
     if (chain && !["MAIN", "TEST"].includes(chain)) {
       return res.status(400).json({ error: "Invalid chain value" });
     }
@@ -317,6 +308,7 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
         categoryId,
         ...(chain && { chain }),
         ...(teamId && { teamId }),
+        ...(resolvedTargetRepo && { targetRepo: resolvedTargetRepo }),
         // Team bounties track their team's privacy. A teamless bounty that
         // self-assigns is personal task tracking, so it stays off the public
         // board until an admin approves it (see /:id/approve below).
@@ -968,6 +960,7 @@ router.get("/:id/assignees", authenticate, async (req, res) => {
 // FIX: id was cast to Number() but schema uses cuid strings — removed the cast.
 router.patch("/:id/approve", authenticate, isAdmin, async (req, res) => {
   try {
+    const bountyId = req.params.id;
     const bounty = await prisma.bounty.findUnique({
       where: { id: req.params.id },
       select: { createdBy: true, assignee: true },
