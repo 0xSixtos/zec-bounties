@@ -106,6 +106,7 @@ function createPaymentCacheHarness({ sendError = null } = {}) {
     "../utils/userSelects": require("../../utils/userSelects"),
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../helpers/email": {}, "../helpers/validateBounty": {},
+"../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
     "../helpers/clearBountyChat": { clearBountyChat: forbidden, isTransitionToDone: () => false },
     "../utils/sendMail": forbidden, "../utils/notifyUser": forbidden,
     "../utils/discord/discordNotify": {}, "../utils/discord/discordAssignWebhook": {},
