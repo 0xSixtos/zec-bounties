@@ -79,6 +79,45 @@ test("resolveStaffUser: unique nickname wins over a shared name", async () => {
   assert.equal(resolved.user.id, "nick");
 });
 
+test("resolveStaffUser: another user's display name cannot shadow a nickname", async () => {
+  const users = [
+    { id: "imposter", name: "sam", nickname: "sam.9" },
+    { id: "real", name: "Sam Doe", nickname: "sam" },
+  ];
+  const prisma = {
+    user: {
+      findUnique: async ({ where }) =>
+        users.find((u) =>
+          where.id ? u.id === where.id : u.nickname === where.nickname,
+        ) || null,
+      findMany: async ({ where }) =>
+        users.filter((u) => u.name === where.name),
+    },
+  };
+  const resolved = await resolveStaffUser(prisma, "sam");
+  assert.equal(resolved.user.id, "real");
+});
+
+test("resolveStaffUser: passes the caller's select to every lookup", async () => {
+  const select = { id: true, bio: true };
+  const seen = [];
+  const prisma = {
+    user: {
+      findUnique: async (args) => {
+        seen.push(args.select);
+        return null;
+      },
+      findMany: async (args) => {
+        seen.push(args.select);
+        return [];
+      },
+    },
+  };
+  const resolved = await resolveStaffUser(prisma, "100%", select);
+  assert.equal(resolved.status, 404);
+  assert.deepEqual(seen, [select, select, select]);
+});
+
 test("staff view pages history and drops private user fields", () => {
   const leaked = {
     id: "b1",
