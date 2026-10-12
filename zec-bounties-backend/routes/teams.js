@@ -661,14 +661,9 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
         return res.json({ data: [], total: 0, page, limit });
       }
 
-      const [member, favorite] = await Promise.all([
-        getTeamMember(teamId, userId),
-        prisma.teamFavorite.findUnique({
-          where: { userId_teamId: { userId, teamId } },
-        }),
-      ]);
+      const member = await getTeamMember(teamId, userId);
 
-      if (!member && !favorite) {
+      if (!member) {
         return res.json({ data: [], total: 0, page, limit });
       }
     }
@@ -881,8 +876,8 @@ router.post(
       res.status(201).json(bounty);
 
       // Fire-and-forget notifications, scoped to the team's audience (members,
-      // favoriters, admins) rather than every user on the platform — a team
-      // bounty isn't global marketplace news the way a public one is.
+      // admins) rather than every user on the platform: a team bounty isn't
+      // global marketplace news the way a public one is.
       (async () => {
         try {
           const notifyIds = (recipients ?? []).filter(

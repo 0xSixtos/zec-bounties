@@ -128,7 +128,6 @@ export function BountyDetailModal({
     submitWork,
     editSubmission,
     teams,
-    favoriteTeamIds,
   } = useBounty();
 
   const [applicationMessage, setApplicationMessage] = useState("");
@@ -231,9 +230,7 @@ export function BountyDetailModal({
     !bounty.isPrivate ||
     currentUser?.role === "ADMIN" ||
     bounty.createdBy === currentUser?.id ||
-    (bounty.teamId != null &&
-      (teams.some((t) => t.id === bounty.teamId) ||
-        favoriteTeamIds.has(bounty.teamId)));
+    (bounty.teamId != null && teams.some((t) => t.id === bounty.teamId));
 
   const isMissingUAForMainnet =
     bounty.chain === "MAIN" && !currentUser?.UA_address;

@@ -160,15 +160,10 @@ async function canViewPrivateBounty(bounty, user) {
   if (bounty.createdBy === user.id) return true;
   if (!bounty.teamId) return false;
 
-  const [teamMember, favorite] = await Promise.all([
-    prisma.teamMember.findUnique({
-      where: { teamId_userId: { teamId: bounty.teamId, userId: user.id } },
-    }),
-    prisma.teamFavorite.findUnique({
-      where: { userId_teamId: { userId: user.id, teamId: bounty.teamId } },
-    }),
-  ]);
-  return !!(teamMember || favorite);
+  const teamMember = await prisma.teamMember.findUnique({
+    where: { teamId_userId: { teamId: bounty.teamId, userId: user.id } },
+  });
+  return !!teamMember;
 }
 
 // ─── Weekly bounty-creation quota ───────────────────────────────────────────
@@ -472,9 +467,9 @@ router.get("/", optionalAuthenticate, async (req, res) => {
     // ------------------------------------------------------------
     // Visibility — public bounties, PLUS any private bounty the viewer
     // actually has access to: one they created, or one belonging to a
-    // team they're a member of or favorite. This is what lets a private
-    // team's members see that team's bounties on their own home feed, not
-    // only on the team's own console page. Admins see everything.
+    // team they're a member of. This is what lets a private team's members
+    // see that team's bounties on their own home feed, not only on the
+    // team's own console page. Admins see everything.
     //
     // This filter runs inside the DB query (not a post-fetch JS filter),
     // so `take: limit` below always returns a correctly-sized page —
@@ -493,10 +488,6 @@ router.get("/", optionalAuthenticate, async (req, res) => {
                   {
                     isPrivate: true,
                     team: { members: { some: { userId } } },
-                  },
-                  {
-                    isPrivate: true,
-                    team: { favoritedBy: { some: { userId } } },
                   },
                 ]
               : []),
