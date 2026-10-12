@@ -24,10 +24,12 @@ import {
 } from "@/components/ui/select";
 import { useBounty } from "@/lib/bounty-context";
 import type { BountyFormData } from "@/lib/types";
-import { Loader2, Plus, Clock, Tag, AlignLeft } from "lucide-react";
+import { Loader2, Plus, Clock, Tag, AlignLeft, Users, Ban } from "lucide-react";
 import { SiZcash } from "react-icons/si";
 import { toast } from "sonner";
 import { toDateInputValue, parseDateInputValue } from "@/lib/utils";
+import { REPOS } from "@/lib/repos";
+import { RepoMenuLabel } from "@/components/repo-filter";
 
 interface CreateBountyFormProps {
   onSuccess?: () => void;
@@ -40,6 +42,7 @@ type FieldErrors = {
   category?: string;
   reward?: string;
   description?: string;
+  team?: string;
 };
 
 export function NewBountyModal({
@@ -54,6 +57,8 @@ export function NewBountyModal({
     categories,
     bountyQuota,
     fetchBountyQuota,
+    communities,
+    fetchCommunities,
   } = useBounty();
 
   const [formData, setFormData] = useState({
@@ -62,33 +67,45 @@ export function NewBountyModal({
     bountyAmount: 0,
     timeToComplete: new Date(),
     category: "",
+    teamId: "",
+    targetRepo: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [errorSummary, setErrorSummary] = useState("");
   const openerRef = useRef<HTMLElement | null>(null);
   const clearFieldError = (field: keyof FieldErrors) => {
-  setFieldErrors((prev) => {
-    if (!prev[field]) return prev;
+    setFieldErrors((prev) => {
+      if (!prev[field]) return prev;
 
-    const next = { ...prev };
-    delete next[field];
-    return next;
-  });
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
 
-  setErrorSummary("");
+    setErrorSummary("");
   };
 
   useEffect(() => {
-  if (open) fetchBountyQuota();
-  }, [open]);
-
+    if (!open) return;
+    fetchBountyQuota();
+    if (currentUser?.role === "HUNTER") fetchCommunities();
+  }, [open, currentUser?.role]);
   const isAdmin = currentUser?.role === "ADMIN";
+  const isHunter = currentUser?.role === "HUNTER";
+  const blocked = currentUser?.canCreateTasks === false;
   const atLimit =
-  !isAdmin && bountyQuota?.remaining !== null && bountyQuota?.remaining === 0;
+    !isAdmin && bountyQuota?.remaining !== null && bountyQuota?.remaining === 0;
 
-    const validateForm = () => {
+  const validateForm = () => {
     const nextErrors: FieldErrors = {};
+
+    if (blocked) {
+      toast.error("Task creation disabled", {
+        description: "An admin has blocked your account from creating tasks.",
+      });
+      return false;
+    }
 
     if (atLimit) {
       toast.error("Weekly bounty limit reached", {
@@ -107,6 +124,10 @@ export function NewBountyModal({
       nextErrors.category = "Select a category.";
     }
 
+    if (isHunter && !formData.teamId) {
+      nextErrors.team = "Choose the team this suggestion is for.";
+    }
+
     if (!formData.bountyAmount || formData.bountyAmount <= 0) {
       nextErrors.reward = "Enter a reward amount greater than 0.";
     }
@@ -118,12 +139,12 @@ export function NewBountyModal({
     setFieldErrors(nextErrors);
 
     const firstInvalid = (
-      ["title", "category", "reward", "description"] as (keyof FieldErrors)[]
+      ["title", "team", "category", "reward", "description"] as (keyof FieldErrors)[]
     ).find((field) => Boolean(nextErrors[field]));
 
     if (firstInvalid) {
       setErrorSummary(
-        "Please correct the highlighted fields before continuing."
+        "Please correct the highlighted fields before continuing.",
       );
 
       requestAnimationFrame(() => {
@@ -137,16 +158,21 @@ export function NewBountyModal({
     return true;
   };
 
-   const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!validateForm()) return;
 
     setIsSubmitting(true);
     try {
-      await createBounty(formData);
-      toast.success("Bounty created!", {
-        description: `"${formData.title}" is now live.`,
+      await createBounty({
+        ...formData,
+        ...(isHunter ? { teamId: formData.teamId } : {}),
+      });
+      toast.success(isHunter ? "Suggestion sent" : "Bounty created!", {
+        description: isHunter
+          ? `"${formData.title}" was sent to the selected team for review.`
+          : `"${formData.title}" is now live.`,
       });
       onSuccess?.();
       setFormData({
@@ -155,6 +181,8 @@ export function NewBountyModal({
         bountyAmount: 0,
         timeToComplete: new Date(),
         category: "",
+        teamId: "",
+    targetRepo: "",
       });
     } catch (error: any) {
       toast.error("Failed to create bounty", {
@@ -209,7 +237,7 @@ export function NewBountyModal({
                 Provide the details for your technical challenge.
               </DialogDescription>
             </div>
-                {!isAdmin && bountyQuota && (
+            {!isAdmin && !blocked && bountyQuota && (
               <div className="inline-flex w-fit items-center gap-2 rounded-full border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
                 <span
                   className={`h-2 w-2 rounded-full ${
@@ -226,17 +254,28 @@ export function NewBountyModal({
               </div>
             )}
 
-           </DialogHeader>
+            {blocked && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                <Ban className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  An admin has blocked your account from creating tasks.
+                </span>
+              </div>
+            )}
+          </DialogHeader>
 
-              {errorSummary && (
-                <div
-                  role="alert"
-                  aria-live="assertive"
-                  className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-                >
-                  {errorSummary}
-                </div>
-              )}
+          {errorSummary && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              {errorSummary}
+            </div>
+          )}
 
           <div className="grid gap-5 px-5 py-5 sam:gap-6 sam:px-6 sam:py-6">
             {/* Title */}
@@ -268,6 +307,37 @@ export function NewBountyModal({
                 </p>
               )}
             </div>
+
+            {/* Category + Reward */}
+            {isHunter && (
+              <div className="space-y-2">
+                <Label htmlFor="team" className="flex items-center gap-2 text-sm font-medium">
+                  <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                  Team
+                </Label>
+                <Select
+                  value={formData.teamId}
+                  onValueChange={(teamId) => {
+                    setFormData((prev) => ({ ...prev, teamId }));
+                    clearFieldError("team");
+                  }}
+                >
+                  <SelectTrigger id="team" className="h-11 rounded-xl" aria-invalid={Boolean(fieldErrors.team)}>
+                    <SelectValue placeholder="Choose a verified team" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {communities.map((team) => (
+                      <SelectItem key={team.id} value={team.id}>
+                        {team.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {fieldErrors.team && (
+                  <p className="text-sm text-destructive">{fieldErrors.team}</p>
+                )}
+              </div>
+            )}
 
             {/* Category + Reward */}
             <div className="grid grid-cols-1 gap-5 imd:grid-cols-2">
@@ -313,6 +383,31 @@ export function NewBountyModal({
               </div>
 
               <div className="space-y-2">
+                <Label htmlFor="targetRepo">Repository</Label>
+                <Select
+                  value={formData.targetRepo || "none"}
+                  onValueChange={(value) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      targetRepo: value === "none" ? "" : value,
+                    }))
+                  }
+                >
+                  <SelectTrigger id="targetRepo" className="w-full">
+                    <SelectValue placeholder="Select repository" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No repository</SelectItem>
+                    {REPOS.map((repo) => (
+                      <SelectItem key={repo.id} value={repo.id}>
+                        <RepoMenuLabel repoId={repo.id} />
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
                 <Label
                   htmlFor="reward"
                   className="flex items-center gap-2 text-sm font-medium"
@@ -335,7 +430,9 @@ export function NewBountyModal({
                   }}
                   placeholder="0.00"
                   aria-invalid={Boolean(fieldErrors.reward)}
-                  aria-describedby={fieldErrors.reward ? "reward-error" : undefined}
+                  aria-describedby={
+                    fieldErrors.reward ? "reward-error" : undefined
+                  }
                   required
                   className="h-11 rounded-xl"
                 />
@@ -373,32 +470,32 @@ export function NewBountyModal({
                 Description
               </Label>
               <Textarea
-                  id="description"
-                  value={formData.description}
-                  onChange={(e) => {
-                    setFormData((prev) => ({
-                      ...prev,
-                      description: e.target.value,
-                    }));
-                    clearFieldError("description");
-                  }}
-                  placeholder="Describe the bounty requirements, deliverables, and any specific instructions..."
-                  rows={4}
-                  className="min-h-[120px] w-full min-w-0 resize-none rounded-xl"
-                  style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
-                  aria-invalid={Boolean(fieldErrors.description)}
-                  aria-describedby={
-                    fieldErrors.description ? "description-error" : undefined
-                  }
-                  required
-                />
-                {fieldErrors.description && (
-                  <p id="description-error" className="text-sm text-destructive">
-                    {fieldErrors.description}
-                  </p>
-                )}
-                </div>
-                </div>
+                id="description"
+                value={formData.description}
+                onChange={(e) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    description: e.target.value,
+                  }));
+                  clearFieldError("description");
+                }}
+                placeholder="Describe the bounty requirements, deliverables, and any specific instructions..."
+                rows={4}
+                className="min-h-[120px] w-full min-w-0 resize-none rounded-xl"
+                style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+                aria-invalid={Boolean(fieldErrors.description)}
+                aria-describedby={
+                  fieldErrors.description ? "description-error" : undefined
+                }
+                required
+              />
+              {fieldErrors.description && (
+                <p id="description-error" className="text-sm text-destructive">
+                  {fieldErrors.description}
+                </p>
+              )}
+            </div>
+          </div>
           <DialogFooter className="flex-col-reverse gap-3 border-t border-border px-5 py-4 imd:flex-row imd:items-center imd:justify-end sam:px-6">
             {onCancel && (
               <Button
@@ -413,7 +510,7 @@ export function NewBountyModal({
             )}
             <Button
               type="submit"
-              disabled={isSubmitting || atLimit}
+              disabled={isSubmitting || atLimit || blocked}
               className="h-11 w-full rounded-xl px-6 w-auto"
             >
               {isSubmitting ? (
@@ -421,6 +518,8 @@ export function NewBountyModal({
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Creating...
                 </>
+              ) : blocked ? (
+                "Task creation disabled"
               ) : atLimit ? (
                 "Weekly limit reached"
               ) : (
