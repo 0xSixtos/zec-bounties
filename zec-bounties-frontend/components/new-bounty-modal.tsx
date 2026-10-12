@@ -24,8 +24,7 @@ import {
 } from "@/components/ui/select";
 import { useBounty } from "@/lib/bounty-context";
 import type { BountyFormData } from "@/lib/types";
-import { Loader2, Plus, Clock, Tag, AlignLeft, Users } from "lucide-react";
-import { Loader2, Plus, Clock, Tag, AlignLeft, Ban } from "lucide-react";
+import { Loader2, Plus, Clock, Tag, AlignLeft, Users, Ban } from "lucide-react";
 import { SiZcash } from "react-icons/si";
 import { toast } from "sonner";
 import { toDateInputValue, parseDateInputValue } from "@/lib/utils";
