@@ -58,6 +58,8 @@ function loadRoutes(prisma) {
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../utils/bountyHelpers": helpers,
     "../utils/bountyActivity": { logActivity: noOp },
+    "../helpers/validateBounty": require("../../helpers/validateBounty"),
+    "../helpers/teamRoles": require("../../helpers/teamRoles"),
     "path": path,
     "multer": require("multer"),
     "fs": { promises: {} },
