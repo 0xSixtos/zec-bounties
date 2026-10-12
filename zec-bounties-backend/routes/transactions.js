@@ -59,9 +59,24 @@ async function releaseClaim(batchKey, bountyIds, errorDetail, raw) {
   await Promise.all(bountyIds.map((id) => invalidateBounty(id)));
 }
 
+// The requesting admin's default wallet, created on first use. Re-read after
+// init (as GET /api/zcash/info does) so a command never runs with null params.
+async function defaultWalletParams(userId, { create = true } = {}) {
+  let params = await getDefaultZcashParams(userId);
+  if (!params && create) {
+    await initZcashOnce(userId, "Main");
+    params = await getDefaultZcashParams(userId);
+  }
+  return params;
+}
+
+const noWallet = (res) =>
+  res.status(404).json({ success: false, message: "No Zcash wallet available" });
+
 // List transactions (Admin)
 router.get("/", authenticate, isAdmin, async (req, res) => {
-  const params = await getDefaultZcashParams(req.user.id);
+  const params = await defaultWalletParams(req.user.id, { create: false });
+  if (!params) return noWallet(res);
   const txs = await executeZingoCliTransactions(params);
 
   // ✅ Send transactions only to the requesting admin
@@ -75,10 +90,8 @@ router.get("/", authenticate, isAdmin, async (req, res) => {
 });
 
 router.get("/rescan", authenticate, isAdmin, async (req, res) => {
-  const params = await getDefaultZcashParams(req.user.id);
-  if (!params) {
-    await initZcashOnce((ownerId = req.user.id), (accountName = "Main"));
-  }
+  const params = await defaultWalletParams(req.user.id);
+  if (!params) return noWallet(res);
   // await executeZingoCliQuit("quit", params);
   await executeZingoCliRescan("rescan", params);
 
@@ -86,10 +99,8 @@ router.get("/rescan", authenticate, isAdmin, async (req, res) => {
 });
 
 router.get("/sync-status", authenticate, isAdmin, async (req, res) => {
-  const params = await getDefaultZcashParams(req.user.id);
-  if (!params) {
-    await initZcashOnce((ownerId = req.user.id), (accountName = "Main"));
-  }
+  const params = await defaultWalletParams(req.user.id);
+  if (!params) return noWallet(res);
   const data = await executeZingoCliSync("sync status", params);
   console.log("status", data);
 
@@ -102,10 +113,8 @@ router.get("/sync-status", authenticate, isAdmin, async (req, res) => {
 });
 
 router.get("/balance", authenticate, isAdmin, async (req, res) => {
-  const params = await getDefaultZcashParams(req.user.id);
-  if (!params) {
-    await initZcashOnce((ownerId = req.user.id), (accountName = "Main"));
-  }
+  const params = await defaultWalletParams(req.user.id);
+  if (!params) return noWallet(res);
   const data = await executeZingoCliBalance("balance", params);
 
   // ✅ Send balance only to the requesting admin (not broadcast)
@@ -135,7 +144,8 @@ router.post("/accounts", authenticate, async (req, res) => {
 
 // List addresses (Admin)
 router.get("/addresses", authenticate, isAdmin, async (req, res) => {
-  const params = await getDefaultZcashParams(req.user.id);
+  const params = await defaultWalletParams(req.user.id, { create: false });
+  if (!params) return noWallet(res);
   const status = await executeZingoCliSync("sync status", params);
   console.log("status-add", status);
 
