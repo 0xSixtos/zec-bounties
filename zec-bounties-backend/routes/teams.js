@@ -7,6 +7,7 @@ const {
   optionalAuthenticate,
   AUTH_USER_SELECT,
 } = require("../middleware/auth");
+const { isSettableMemberRole } = require("../helpers/teamRoles");
 const { initZcashOnce, initZcashOnceForTeams } = require("../zcash/init");
 const {
   sendRealtimeUpdate,
@@ -1736,10 +1737,27 @@ router.patch("/:teamId/members/:userId", authenticate, async (req, res) => {
 
     const { role } = req.body;
 
-    if (!["OWNER", "ADMIN", "MEMBER"].includes(role)) {
+    // OWNER is not assignable here (mirrors POST /:teamId/members). Allowing it
+    // let a team ADMIN — who passes requireTeamAdmin — self-promote to OWNER.
+    if (!isSettableMemberRole(role)) {
       return res.status(400).json({
         error: "Invalid role",
       });
+    }
+
+    // Never let this route modify the current OWNER's row (e.g. demote the
+    // founder so the caller can take over) unless the caller is a global admin.
+    const targetMember = await prisma.teamMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+      select: { role: true },
+    });
+    if (!targetMember) {
+      return res.status(404).json({ error: "Member not found" });
+    }
+    if (targetMember.role === "OWNER" && req.user.role !== "ADMIN") {
+      return res
+        .status(403)
+        .json({ error: "The team owner's role cannot be changed here" });
     }
 
     const member = await prisma.teamMember.update({
@@ -1791,6 +1809,23 @@ router.delete("/:teamId/members/:userId", authenticate, async (req, res) => {
 
     if (userId !== req.user.id) {
       if (!(await requireTeamAdmin(teamId, req, res))) return;
+    }
+
+    // A team admin must not be able to evict the team OWNER (the companion to
+    // self-promotion: remove the founder, then claim the team). The owner may
+    // still leave on their own, and a global admin may still act.
+    const targetMember = await prisma.teamMember.findUnique({
+      where: { teamId_userId: { teamId, userId } },
+      select: { role: true },
+    });
+    if (
+      targetMember?.role === "OWNER" &&
+      userId !== req.user.id &&
+      req.user.role !== "ADMIN"
+    ) {
+      return res
+        .status(403)
+        .json({ error: "The team owner cannot be removed" });
     }
 
     await prisma.teamMember.delete({
