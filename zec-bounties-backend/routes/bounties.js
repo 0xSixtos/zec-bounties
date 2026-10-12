@@ -434,7 +434,10 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
 router.get("/", optionalAuthenticate, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    // Clamp to 1..50. A negative value passed Math.min untouched and reached
+    // Prisma as `take: -N`, which reads N rows from the end of the ordering
+    // with no upper bound.
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
 
     const isAuthed = Boolean(req.user);
     const isDev = process.env.NODE_ENV !== "production";
