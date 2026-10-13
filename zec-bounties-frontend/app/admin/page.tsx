@@ -63,7 +63,6 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { AdminBountyModal } from "@/components/admin-bounty-modal";
-import { BountyDetailModal } from "@/components/bounty-detail-modal";
 import { BountyRepoMark, RepoFilter } from "@/components/repo-filter";
 import { bountyRepo, type RepoId } from "@/lib/repos";
 import { ProtectedRoute } from "@/components/auth/protected-route";
@@ -491,7 +490,6 @@ export default function AdminDashboard() {
 
   // Read-only detail view — kept for the "View Details" menu action, but
   // no longer the default click target for a bounty's title/row.
-  const [viewingBounty, setViewingBounty] = useState<Bounty | null>(null);
   const [editingBounty, setEditingBounty] = useState<Bounty | null>(null);
   const [assigneeSectionBounty, setAssigneeSectionBounty] =
     useState<Bounty | null>(null);
@@ -1484,7 +1482,7 @@ export default function AdminDashboard() {
                                 bounty={bounty}
                                 pendingApps={pendingApps}
                                 pendingSubs={pendingSubs}
-                                onView={() => setViewingBounty(bounty)}
+                                onView={() => setEditingBounty(bounty)}
                                 onEdit={() => setEditingBounty(bounty)}
                                 onStatusChange={(status) =>
                                   handleStatusChange(bounty.id, status)
@@ -1933,7 +1931,7 @@ export default function AdminDashboard() {
                                     bounty={bounty}
                                     pendingApps={pendingApps}
                                     pendingSubs={pendingSubs}
-                                    onView={() => setViewingBounty(bounty)}
+                                    onView={() => setEditingBounty(bounty)}
                                     onEdit={() => setEditingBounty(bounty)}
                                     onStatusChange={(status) =>
                                       handleStatusChange(bounty.id, status)
@@ -2126,13 +2124,6 @@ export default function AdminDashboard() {
 
         {/* Read-only detail view — still reachable via "View Details" in
             the actions menu, but no longer the default click target. */}
-        <BountyDetailModal
-          bounty={viewingBounty}
-          open={!!viewingBounty}
-          onOpenChange={(open) => {
-            if (!open) setViewingBounty(null);
-          }}
-        />
 
         <EditBountyModal
           bounty={editingBounty}
