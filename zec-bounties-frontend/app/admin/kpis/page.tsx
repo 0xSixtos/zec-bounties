@@ -1391,12 +1391,25 @@ export default function KpisDashboard() {
 
                 {selectedChart === "starBadges" && (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={starBadgesOverTime}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                      <XAxis dataKey="month" stroke="var(--muted-foreground)" />
-                      <YAxis stroke="var(--muted-foreground)" />
+                    <LineChart data={starBadgesOverTime} margin={{ top: 8, right: 12, left: 0, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis
+                        dataKey="month"
+                        stroke="var(--muted-foreground)"
+                        tick={{ fontSize: 12 }}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="var(--muted-foreground)"
+                        allowDecimals={false}
+                        tick={{ fontSize: 12 }}
+                        tickLine={false}
+                        axisLine={false}
+                        width={32}
+                      />
                       <Tooltip
-                        cursor={{ fill: "var(--muted)", opacity: 0.4 }}
+                        cursor={{ stroke: "var(--muted)", strokeWidth: 1 }}
                         contentStyle={{
                           backgroundColor: "var(--popover)",
                           border: "1px solid var(--border)",
@@ -1404,17 +1417,25 @@ export default function KpisDashboard() {
                           color: "var(--popover-foreground)",
                         }}
                       />
-                      <Legend />
+                      <Legend
+                        verticalAlign="bottom"
+                        height={36}
+                        iconType="circle"
+                        wrapperStyle={{ fontSize: 12 }}
+                      />
                       {STAR_KEYS.map((key) => (
-                        <Bar
+                        <Line
                           key={key}
+                          type="monotone"
                           dataKey={key}
                           name={STAR_LABELS[key]}
-                          stackId="a"
-                          fill={STAR_COLORS[key]}
+                          stroke={STAR_COLORS[key]}
+                          strokeWidth={2.5}
+                          dot={{ r: 4, strokeWidth: 0 }}
+                          activeDot={{ r: 5 }}
                         />
                       ))}
-                    </BarChart>
+                    </LineChart>
                   </ResponsiveContainer>
                 )}
               </CardContent>
