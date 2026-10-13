@@ -1658,6 +1658,20 @@ router.post("/:teamId/members", authenticate, async (req, res) => {
       });
     }
 
+    // The upsert below rewrites the role of anyone already in the team, so
+    // re-adding the OWNER would demote them. Same rule as PATCH.
+    if (req.user.role !== "ADMIN") {
+      const owner = await prisma.teamMember.findFirst({
+        where: { teamId, userId: { in: userIds }, role: "OWNER" },
+        select: { userId: true },
+      });
+      if (owner) {
+        return res
+          .status(403)
+          .json({ error: "The team owner's role cannot be changed here" });
+      }
+    }
+
     const members = await Promise.all(
       userIds.map((userId) =>
         prisma.teamMember.upsert({
