@@ -7,7 +7,17 @@ import { useBounty } from "@/lib/bounty-context";
 import { BottomTabBar } from "@/components/layout/bottom-tab-bar";
 import { NewBountyModal } from "@/components/new-bounty-modal";
 
-export function MobileNavShell({ children }: { children: React.ReactNode }) {
+interface MobileNavShellProps {
+  children: React.ReactNode;
+  onOpenTeams?: () => void;
+  teamsActive?: boolean;
+}
+
+export function MobileNavShell({
+  children,
+  onOpenTeams,
+  teamsActive,
+}: MobileNavShellProps) {
   const { currentUser } = useBounty();
   const router = useRouter();
   const [isNewBountyModalOpen, setIsNewBountyModalOpen] = useState(false);
@@ -48,6 +58,8 @@ export function MobileNavShell({ children }: { children: React.ReactNode }) {
       <BottomTabBar
         onNewBounty={handleNewBounty}
         newBountyBlocked={taskCreationBlocked}
+        onOpenTeams={onOpenTeams}
+        teamsActive={teamsActive}
       />
     </div>
   );
