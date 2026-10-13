@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { ChevronDown, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmt } from "@/lib/utils";
+import { useBounty } from "@/lib/bounty-context";
+import { EditBountyModal } from "@/components/admin/edit-bounty-modal";
+import type { Bounty } from "@/lib/types";
 
 export type StaffRelation = "created" | "assigned" | "applied";
 
@@ -77,19 +79,20 @@ function isCompleted(row: StaffBountyRow) {
   return row.status === "DONE" && isAssigned(row);
 }
 
-function Row({ row }: { row: StaffBountyRow }) {
+function Row({ row, onOpen }: { row: StaffBountyRow; onOpen: (id: string) => void }) {
   const meta = STATUS_META[row.status];
   const earned = isEarned(row);
   const completed = isCompleted(row);
   return (
     <li className="flex flex-col gap-1 border-b border-border/60 py-2 last:border-0">
       <div className="flex items-start justify-between gap-3">
-        <Link
-          href={`/bounty/${row.id}`}
-          className="text-sm font-medium hover:underline truncate"
+        <button
+          type="button"
+          onClick={() => onOpen(row.id)}
+          className="text-sm font-medium hover:underline truncate text-left"
         >
           {row.title}
-        </Link>
+        </button>
         <span className="text-right shrink-0">
           <span className="block text-xs tabular-nums text-muted-foreground">
             {fmt(amount(row))} ZEC
@@ -144,11 +147,13 @@ function List({
   total,
   rows,
   onLoadMore,
+  onOpen,
 }: {
   title: string;
   total: number;
   rows: StaffBountyRow[];
   onLoadMore?: () => void;
+  onOpen: (id: string) => void;
 }) {
   if (rows.length === 0 && !onLoadMore) return null;
   return (
@@ -161,7 +166,7 @@ function List({
       ) : (
         <ul>
           {rows.map((row) => (
-            <Row key={row.id} row={row} />
+            <Row key={row.id} row={row} onOpen={onOpen} />
           ))}
         </ul>
       )}
@@ -195,6 +200,13 @@ export function StaffViewCard({
 }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<string>("ALL");
+  const { fetchBountyById } = useBounty();
+  const [editingBounty, setEditingBounty] = useState<Bounty | null>(null);
+
+  const openBounty = async (id: string) => {
+    const bounty = await fetchBountyById(id);
+    if (bounty) setEditingBounty(bounty);
+  };
   const loaded = [...(data?.open || []), ...(data?.history || [])];
   const bountyCount = data?.bountyCount ?? (data ? data.openTotal + data.historyTotal : 0);
   const counted = loaded.reduce<Record<string, number>>((acc, row) => {
@@ -319,17 +331,26 @@ export function StaffViewCard({
                 total={data.openTotal}
                 rows={visible(data.open)}
                 onLoadMore={data.openNextOffset == null ? undefined : onLoadMoreOpen}
+                onOpen={openBounty}
               />
               <List
                 title="History"
                 total={data.historyTotal}
                 rows={visible(data.history)}
                 onLoadMore={data.historyNextOffset == null ? undefined : onLoadMoreHistory}
+                onOpen={openBounty}
               />
             </>
           )}
         </CardContent>
       )}
     </Card>
+    <EditBountyModal
+      bounty={editingBounty}
+      open={!!editingBounty}
+      onOpenChange={(open) => {
+        if (!open) setEditingBounty(null);
+      }}
+    />
   );
 }
