@@ -353,7 +353,12 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
               pushNotifications: true,
             },
           }));
-        const otherUsers = users.filter((u) => u.id !== req.user.id);
+        // A private bounty is announced only to its audience, the same
+        // people who got the realtime update above.
+        const audience = recipients && new Set(recipients);
+        const otherUsers = users.filter(
+          (u) => u.id !== req.user.id && (!audience || audience.has(u.id)),
+        );
         const emailRecipients = otherUsers
           .filter((u) => u.emailNotifications !== false)
           .map((u) => u.email)
@@ -1078,7 +1083,7 @@ router.patch("/:id/suggestion-review", authenticate, async (req, res) => {
     });
 
     await invalidateBounty(bounty.id);
-    sendRealtimeUpdate("bounty_updated", updated, req.user.id);
+    await broadcastBountyEvent("bounty_updated", updated, bounty.id, req.user.id);
     return res.json(updated);
   } catch (error) {
     console.error("Failed to review bounty suggestion:", error);
