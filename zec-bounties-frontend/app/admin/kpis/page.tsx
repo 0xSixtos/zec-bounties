@@ -26,7 +26,7 @@ import {
   matchesReceiverFilter,
   type UaReceiverKey,
 } from "@/components/address/ua-receiver-icons";
-import { getBadgeTooltip, matchesBadgeFilter } from "@/lib/badges";
+import { getBadgeTooltip, matchesBadgeFilter, STAR_KEYS } from "@/lib/badges";
 import {
   ResponsiveContainer,
   BarChart,
@@ -73,8 +73,29 @@ type ChartType =
   | "topEarners"
   | "bountyTypes"
   | "addressTypes"
-  | "avgEarnings";
+  | "avgEarnings"
+  | "starBadges";
 
+
+const [starBadgesOverTime, setStarBadgesOverTime] = useState<any[]>([]);
+
+const STAR_COLORS: Record<string, string> = {
+  "1-task": "#a0a0a0",
+  "5-tasks": "#3b82f6",
+  "10-tasks": "#22c55e",
+  "15-tasks": "#eab308",
+  "25-tasks": "#f97316",
+  "50-tasks": "#ef4444",
+};
+
+const STAR_LABELS: Record<string, string> = {
+  "1-task": "1 Task",
+  "5-tasks": "5 Tasks",
+  "10-tasks": "10 Tasks",
+  "15-tasks": "15 Tasks",
+  "25-tasks": "25 Tasks",
+  "50-tasks": "50 Tasks",
+};
 const CHART_PALETTE = [
   "var(--chart-1)",
   "var(--chart-2)",
@@ -405,6 +426,30 @@ export default function KpisDashboard() {
     };
     fetchData();
   }, [chainFilter]);
+
+  // Fetch Star Badges Over Time
+  useEffect(() => {
+    if (viewMode !== "admin") return;
+
+    const fetchData = async () => {
+      try {
+        const params = new URLSearchParams();
+        const chain = chainFilter === "all" ? "ALL" : chainFilter;
+        params.set("chain", chain);
+
+        const res = await fetch(
+          `${backendUrl}/api/kpis/star-badges-over-time?${params.toString()}`,
+          {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("authToken")}`,
+            },
+          },
+        );
+        if (res.ok) setStarBadgesOverTime(await res.json());
+      } catch {}
+    };
+    fetchData();
+  }, [viewMode, chainFilter]);
 
   // Fetch Average + Median Earnings Over Time
   useEffect(() => {
@@ -1105,6 +1150,7 @@ export default function KpisDashboard() {
                     <option value="avgEarnings">
                       Avg Earnings per Contributor (Monthly)
                     </option>
+                    <option value="starBadges">Star Badges Over Time</option>
                   </select>
                 </div>
               </CardHeader>
@@ -1341,6 +1387,35 @@ export default function KpisDashboard() {
                         dot={{ r: 3 }}
                       />
                     </LineChart>
+                  </ResponsiveContainer>
+                )}
+
+                {selectedChart === "starBadges" && (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={starBadgesOverTime}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                      <XAxis dataKey="month" stroke="var(--muted-foreground)" />
+                      <YAxis stroke="var(--muted-foreground)" />
+                      <Tooltip
+                        cursor={{ fill: "var(--muted)", opacity: 0.4 }}
+                        contentStyle={{
+                          backgroundColor: "var(--popover)",
+                          border: "1px solid var(--border)",
+                          borderRadius: "6px",
+                          color: "var(--popover-foreground)",
+                        }}
+                      />
+                      <Legend />
+                      {STAR_KEYS.map((key) => (
+                        <Bar
+                          key={key}
+                          dataKey={key}
+                          name={STAR_LABELS[key]}
+                          stackId="a"
+                          fill={STAR_COLORS[key]}
+                        />
+                      ))}
+                    </BarChart>
                   </ResponsiveContainer>
                 )}
               </CardContent>
