@@ -102,6 +102,7 @@ export function EditBountyModal({
   defaultSection = "details",
 }: EditBountyModalProps) {
   const { updateBounty, nonAdminUsers, currentUser, fetchBountyActivity } =
+  if (currentUser?.role !== "ADMIN") return null;
     useBounty();
   const [isSaving, setIsSaving] = useState(false);
   const [activeSection, setActiveSection] = useState<

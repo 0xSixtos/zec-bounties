@@ -2726,7 +2726,7 @@ router.get("/:id/activity", authenticate, async (req, res) => {
       select: { id: true, createdBy: true, teamId: true },
     });
     if (!bounty) return res.status(404).json({ error: "Bounty not found" });
-    if (!(await canManageBounty(bounty, req.user))) {
+    if (req.user.role !== "ADMIN") {
       return res.status(403).json({ error: "Access denied" });
     }
 
