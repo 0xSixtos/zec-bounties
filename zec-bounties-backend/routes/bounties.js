@@ -34,6 +34,7 @@ const {
   USER_SELECT_PUBLIC,
   USER_SELECT_FULL,
   USER_SELECT_WITH_ROLE,
+  bountyUserSelects,
   USER_SELECT_BASIC,
   USER_SELECT_MINIMAL,
   USER_SELECT_EXPORT,
@@ -509,11 +510,10 @@ router.get("/", optionalAuthenticate, async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const userSelect = isAuthed ? USER_SELECT : USER_SELECT_PUBLIC;
-    const createdByUserSelect = isAuthed
-      ? USER_SELECT_WITH_ROLE
-      : USER_SELECT_PUBLIC;
-    const assigneeUserSelect = isAuthed ? USER_SELECT_FULL : USER_SELECT_PUBLIC;
+    const {
+      user: assigneeUserSelect,
+      createdByUser: createdByUserSelect,
+    } = bountyUserSelects({ isAuthed, isAdmin });
 
     const [bounties, total] = await Promise.all([
       prisma.bounty.findMany({
@@ -522,7 +522,7 @@ router.get("/", optionalAuthenticate, async (req, res) => {
         take: limit,
         orderBy: { dateCreated: "desc" },
         include: {
-          assignees: { include: { user: { select: userSelect } } },
+          assignees: { include: { user: { select: assigneeUserSelect } } },
           assigneeUser: { select: assigneeUserSelect },
           createdByUser: { select: createdByUserSelect },
           team: { select: { id: true, name: true, logo: true } },
@@ -2755,10 +2755,8 @@ router.get("/:id", optionalAuthenticate, async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const userSelect = isAuthed ? USER_SELECT_FULL : USER_SELECT_PUBLIC;
-    const createdByUserSelect = isAuthed
-      ? USER_SELECT_WITH_ROLE
-      : USER_SELECT_PUBLIC;
+    const { user: userSelect, createdByUser: createdByUserSelect } =
+      bountyUserSelects({ isAuthed, isAdmin });
 
     const bounty = await prisma.bounty.findUnique({
       where: { id: bountyId },
