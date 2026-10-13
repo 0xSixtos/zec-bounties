@@ -184,3 +184,38 @@ test("removing assignees from a DONE bounty keeps its payee", async () => {
   );
   assert.equal(db.bounty.assignee, "legacy");
 });
+
+test("changing the assignees clears the cached list for admins and for other viewers", async () => {
+  useFakeDb(["legacy", "other"]);
+  const written = [];
+  const deleted = [];
+  redisClient.setEx = async (key) => {
+    written.push(key);
+    return null;
+  };
+  redisClient.del = async (...keys) => {
+    deleted.push(...keys);
+    return null;
+  };
+  try {
+    for (const user of [admin, { id: "other", role: "HUNTER" }]) {
+      await handler("get", "/:id/assignees")(
+        { params: { id: "b1" }, user },
+        mockRes(),
+      );
+    }
+    const cachedLists = written.filter((key) => key.startsWith("assignees:"));
+    assert.equal(new Set(cachedLists).size, 2);
+
+    await handler("delete", "/:id/assignees/:userId")(
+      { params: { id: "b1", userId: "other" }, user: admin },
+      mockRes(),
+    );
+    for (const key of cachedLists) {
+      assert.ok(deleted.includes(key), `${key} was not cleared`);
+    }
+  } finally {
+    redisClient.setEx = async () => null;
+    redisClient.del = async () => null;
+  }
+});

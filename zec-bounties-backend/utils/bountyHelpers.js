@@ -142,7 +142,7 @@ async function broadcastBountyEvent(type, payload, bountyId, excludeUserId) {
 // that changes a bounty calls this — never a local copy.
 async function invalidateBounty(bountyId) {
   await Promise.all([
-    delCache(`assignees:${bountyId}`),
+    delCache(`assignees:admin:${bountyId}`, `assignees:user:${bountyId}`),
     delCache("stats:totals"),
     bumpVersion("bounties"),
   ]);
