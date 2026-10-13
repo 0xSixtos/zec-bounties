@@ -77,8 +77,6 @@ type ChartType =
   | "starBadges";
 
 
-const [starBadgesOverTime, setStarBadgesOverTime] = useState<any[]>([]);
-
 const STAR_COLORS: Record<string, string> = {
   "1-task": "#a0a0a0",
   "5-tasks": "#3b82f6",
@@ -205,7 +203,8 @@ export default function KpisDashboard() {
   const [averageEarningsOverTime, setAverageEarningsOverTime] = useState<any[]>(
     [],
   );
-
+ 
+ const [starBadgesOverTime, setStarBadgesOverTime] = useState<any[]>([]);  
   const [isBadgeModalOpen, setIsBadgeModalOpen] = useState(false);
   const [selectedUserForBadges, setSelectedUserForBadges] = useState<any>(null);
   const [selectedBadges, setSelectedBadges] = useState<string[]>([]);
