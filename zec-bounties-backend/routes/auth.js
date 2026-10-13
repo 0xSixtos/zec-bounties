@@ -3,7 +3,6 @@ const axios = require("axios");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const prisma = require("../prisma/client");
-const { isTeamWallet } = require("../helpers/walletRecovery.js");
 const {
   authenticate,
   isAdmin,
@@ -565,37 +564,28 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
   }
 
   try {
-    // Find the wallet params belonging to this user.
-    // walletId is now the source of truth for the wallet directory.
+    // Find the user's PERSONAL wallet params. Team wallet copies are shared, so
+    // they are not recoverable here; scoping to teamId: null excludes them (a
+    // user may hold a personal and a team wallet with the same accountName).
+    // Team-wallet recovery, if ever needed, must be a separate OWNER-only,
+    // requireTeamAdmin-gated endpoint.
     const zcashParam = await prisma.zcashParams.findFirst({
       where: {
         accountName,
         ownerId: req.user.id,
+        teamId: null,
       },
       select: {
         walletId: true,
         accountName: true,
         chain: true,
         serverUrl: true,
-        isTeam: true,
-        teamId: true,
       },
     });
 
     if (!zcashParam) {
       return res.status(404).json({
         error: "Wallet not found or access denied",
-      });
-    }
-
-    // A team wallet is a shared treasury. Every member holds a synced params
-    // row that points at it, so owning this row is NOT proof the wallet is
-    // personal — refuse to hand its seed to the self-service recovery flow.
-    // (Team-wallet recovery, if ever needed, must be a separate OWNER-only,
-    // requireTeamAdmin-gated endpoint.)
-    if (isTeamWallet(zcashParam)) {
-      return res.status(403).json({
-        error: "Team wallets cannot be recovered from a personal account",
       });
     }
 
