@@ -469,7 +469,7 @@ test.describe("keyboard accessibility", () => {
     );
 
     const deliverable = dialog.locator("#deliverable-url");
-    const helpText = "Share a link where your completed work can be reviewed.";
+    const helpText = "Share links where your completed work can be reviewed.";
     await expect(dialog.locator("#deliverable-url-help")).toHaveText(helpText);
     await expect(deliverable).toHaveAccessibleDescription(helpText);
 
@@ -507,10 +507,10 @@ test.describe("keyboard accessibility", () => {
     );
 
     await expect(dialog.locator("#deliverable-url-error")).toHaveText(
-      "Enter a deliverable URL.",
+      "Enter at least one deliverable URL.",
     );
     await expect(deliverable).toHaveAccessibleDescription(
-      `${helpText} Enter a deliverable URL.`,
+      `${helpText} Enter at least one deliverable URL.`,
     );
 
     await deliverable.fill("https://example.invalid/completed-work");
