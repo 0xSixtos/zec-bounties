@@ -930,12 +930,16 @@ router.get("/:id/assignees", authenticate, async (req, res) => {
     if (!(await canViewPrivateBounty(bounty, req.user))) {
       return res.status(404).json({ error: "Bounty not found" });
     }
-    const cacheKey = `assignees:${req.params.id}`;
+    // Email and payout addresses are admin-only, same as the bounty read routes.
+    // Cache key is scoped by viewer so an admin payload cannot be served to a hunter.
+    const viewerIsAdmin = req.user?.role === "ADMIN";
+    const userSelect = viewerIsAdmin ? USER_SELECT_FULL : USER_SELECT_PUBLIC;
+    const cacheKey = `assignees:${viewerIsAdmin ? "admin" : "user"}:${req.params.id}`;
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
     const assignees = await prisma.bountyAssignee.findMany({
       where: { bountyId: req.params.id },
-      include: { user: { select: USER_SELECT_FULL } },
+      include: { user: { select: userSelect } },
       orderBy: { assignedAt: "asc" },
     });
     await setCache(cacheKey, assignees, TTL.ASSIGNEES);
