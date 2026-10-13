@@ -230,6 +230,7 @@ export function StaffViewCard({
     status === "ALL" ? rows : rows.filter((row) => row.status === status);
 
   return (
+    <>
     <Card className="border-amber-500/40">
       <CardHeader className="pb-2">
         <button
@@ -352,5 +353,6 @@ export function StaffViewCard({
         if (!open) setEditingBounty(null);
       }}
     />
+    </>
   );
 }
