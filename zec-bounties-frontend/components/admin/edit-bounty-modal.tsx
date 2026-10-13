@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import { useBounty } from "@/lib/bounty-context";
 import { Bounty, BountyActivity } from "@/lib/types";
+import Link from "next/link";
 import { displayName } from "@/lib/displayName";
 import { toDateInputValue, parseDateInputValue } from "@/lib/utils";
 import { REPOS } from "@/lib/repos";
@@ -395,18 +396,30 @@ export function EditBountyModal({
                       key={u.id}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background border text-xs font-medium shadow-sm"
                     >
-                      <Avatar className="h-4 w-4">
-                        <AvatarImage
-                          src={u.avatar || "/placeholder-user.jpg"}
-                        />
-                        <AvatarFallback className="text-[8px]">
-                          {displayName(u)[0]}
-                        </AvatarFallback>
-                      </Avatar>
-                      {displayName(u)}
+                      <Link
+                        href={`/users/${u.id}`}
+                        className="inline-flex items-center gap-1.5 hover:underline focus:outline-none focus:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Avatar className="h-4 w-4">
+                          <AvatarImage
+                            src={u.avatar || "/placeholder-user.jpg"}
+                          />
+                          <AvatarFallback className="text-[8px]">
+                            {displayName(u)[0]}
+                          </AvatarFallback>
+                        </Avatar>
+                        {displayName(u)}
+                      </Link>
                       <button
-                        onClick={() => toggleUser(u.id)}
-                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          toggleUser(u.id);
+                        }}
+                        className="text-muted-foreground hover:text-destructive transition-colors ml-0.5"
+                        aria-label={`Remove ${displayName(u)}`}
                       >
                         <X className="h-3 w-3" />
                       </button>
