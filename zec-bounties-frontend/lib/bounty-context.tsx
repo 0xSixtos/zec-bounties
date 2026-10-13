@@ -451,6 +451,8 @@ interface BountyContextType {
   favoriteTeamsLoading: boolean;
   fetchFavoriteTeams: () => Promise<void>;
   toggleFavoriteTeam: (teamId: string) => Promise<void>;
+  activeTeamId: string | null;
+  setActiveTeamId: (id: string | null) => void;
 
   leaderboard: LeaderboardEntry[];
   leaderboardLoading: boolean;
@@ -579,6 +581,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
     new Set(),
   );
   const [favoriteTeamsLoading, setFavoriteTeamsLoading] = useState(false);
+  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
   const [teamPaymentIDs, setTeamPaymentIDs] = useState<string[] | undefined>(
     undefined,
   );
@@ -4214,6 +4217,8 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
         favoriteTeamsLoading,
         fetchFavoriteTeams,
         toggleFavoriteTeam,
+        activeTeamId,
+        setActiveTeamId,
         removeTeamLogo,
         uploadTeamLogo,
         fetchTeamTransactionHashes,
