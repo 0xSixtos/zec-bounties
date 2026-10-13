@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { Bounty, WorkSubmission, User, Notice } from "@/lib/types";
 import {
   Dialog,
@@ -128,7 +129,6 @@ export function BountyDetailModal({
     submitWork,
     editSubmission,
     teams,
-    favoriteTeamIds,
   } = useBounty();
 
   const [applicationMessage, setApplicationMessage] = useState("");
@@ -197,17 +197,24 @@ export function BountyDetailModal({
       bounty.assignees?.some((a) => a.userId === currentUser.id) ||
       bounty.assignee === currentUser.id;
     if (!isAssigned) return;
+    let cancelled = false;
     setSubmissionsLoading(true);
     fetchWorkSubmissions(bounty.id)
-      .then((data) => setWorkSubmissions(data ?? []))
+      .then((data) => {
+        if (!cancelled) setWorkSubmissions(data ?? []);
+      })
       .catch((err) => {
+        if (cancelled) return;
         if (!err?.message?.includes("permission")) {
           console.error("Failed to load submissions:", err);
         }
         setWorkSubmissions([]);
       })
-      .finally(() => setSubmissionsLoading(false));
-  }, [open, bounty?.id, currentUser?.id]);
+      .finally(() => {
+        if (!cancelled) setSubmissionsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, bounty?.id, bounty?.status, currentUser?.id]);
 
   if (!bounty) return null;
 
@@ -231,9 +238,7 @@ export function BountyDetailModal({
     !bounty.isPrivate ||
     currentUser?.role === "ADMIN" ||
     bounty.createdBy === currentUser?.id ||
-    (bounty.teamId != null &&
-      (teams.some((t) => t.id === bounty.teamId) ||
-        favoriteTeamIds.has(bounty.teamId)));
+    (bounty.teamId != null && teams.some((t) => t.id === bounty.teamId));
 
   const isMissingUAForMainnet =
     bounty.chain === "MAIN" && !currentUser?.UA_address;
@@ -340,7 +345,7 @@ export function BountyDetailModal({
       toast.success("Submission updated");
     } catch (error) {
       console.error("Failed to edit submission:", error);
-      toast.error("Failed to update submission");
+      toast.error(getErrorMessage(error, "Failed to update submission"));
     } finally {
       setIsSavingEdit(false);
     }
@@ -482,7 +487,7 @@ export function BountyDetailModal({
       toast.success("Application submitted");
     } catch (error) {
       console.error("Failed to apply:", error);
-      toast.error("Failed to submit application");
+      toast.error(getErrorMessage(error, "Failed to submit application"));
     } finally {
       setIsApplying(false);
     }
@@ -539,7 +544,7 @@ export function BountyDetailModal({
       toast.success("Work submitted");
     } catch (error) {
       console.error("Failed to submit work:", error);
-      toast.error("Failed to submit work");
+      toast.error(getErrorMessage(error, "Failed to submit work"));
     } finally {
       setIsSubmitting(false);
     }
@@ -994,10 +999,16 @@ export function BountyDetailModal({
                 aria-invalid={Boolean(submissionErrors.deliverableUrl)}
                 aria-describedby={
                   submissionErrors.deliverableUrl
-                    ? "deliverable-url-error"
-                    : undefined
+                    ? "deliverable-url-help deliverable-url-error"
+                    : "deliverable-url-help"
                 }
               />
+              <p
+                id="deliverable-url-help"
+                className="text-xs text-muted-foreground"
+              >
+                Share a link where your completed work can be reviewed.
+              </p>
               {submissionErrors.deliverableUrl && (
                 <p
                   id="deliverable-url-error"
@@ -1247,6 +1258,17 @@ export function BountyDetailModal({
               )}
             </div>
           </section>
+        )}
+
+        {bounty.suggestionReviewReason && (
+          <div className="rounded-md border border-border bg-muted/40 px-4 py-3">
+            <p className="text-sm font-medium">
+              Team review: {bounty.suggestionReviewStatus?.toLowerCase() ?? "updated"}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {bounty.suggestionReviewReason}
+            </p>
+          </div>
         )}
 
         {/* Application status */}

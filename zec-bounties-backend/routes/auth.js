@@ -10,6 +10,7 @@ const {
   loadAuthUser,
 } = require("../middleware/auth");
 const { verifyZaddress, verifyUaddress } = require("../helpers/db-query.js");
+const { isSafeShieldedAddress } = require("../helpers/validateAddress.js");
 const {
   getLatestZcashParams,
   getSystemWalletParams,
@@ -18,7 +19,7 @@ const {
 const sendMail = require("../utils/sendMail");
 const executeZingoCliRecoveryInfo = require("../utils/zingo/zingoLibRecoveryInfo");
 const { delCache, deleteCacheByPattern } = require("../utils/cache");
-const { sendRealtimeUpdate } = require("../middleware/websocket");
+const { sendUserUpdated } = require("../middleware/websocket");
 const { OtpStore } = require("../helpers/recoveryOtp");
 
 const router = express.Router();
@@ -227,7 +228,7 @@ router.get("/discord/callback", async (req, res) => {
     });
 
     await delCache("users:all");
-    sendRealtimeUpdate("user_updated", updated, userId);
+    sendUserUpdated(userId, updated);
 
     res.redirect(`${FRONTEND_URL}/profile?discord=success`);
   } catch (err) {
@@ -263,7 +264,7 @@ router.delete("/discord", authenticate, async (req, res) => {
     });
 
     await delCache("users:all");
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -364,7 +365,7 @@ router.patch("/update-email-notifications", authenticate, async (req, res) => {
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -376,6 +377,15 @@ router.patch("/update-email-notifications", authenticate, async (req, res) => {
 router.post("/verify-zaddress", authenticate, async (req, res) => {
   try {
     const { z_address } = req.body;
+
+    // This value reaches zingo-cli's `parse_address` command. Reject anything
+    // that is not a plain base58/bech32 address before it gets there, so a
+    // shell metacharacter can never be interpreted as a command. (The sink is
+    // also hardened to avoid a shell; this is defence in depth.)
+    if (!isSafeShieldedAddress(z_address)) {
+      return res.status(400).json({ error: "Invalid z_address" });
+    }
+
     const params = getSystemWalletParams();
 
     const result = await verifyZaddress(z_address, params);
@@ -389,6 +399,11 @@ router.post("/verify-zaddress", authenticate, async (req, res) => {
 router.post("/verify-uaddress", authenticate, async (req, res) => {
   try {
     const { z_address } = req.body;
+
+    if (!isSafeShieldedAddress(z_address)) {
+      return res.status(400).json({ error: "Invalid address" });
+    }
+
     const params = getSystemWalletParams();
 
     const result = await verifyUaddress(z_address, params);
@@ -416,6 +431,20 @@ router.get("/has-zcash-params", authenticate, async (req, res) => {
 
 router.patch("/update-zaddress", authenticate, async (req, res) => {
   const { z_address } = req.body;
+
+ // Validate before storing. This value is later used as a payout destination
+  // and interpolated into the zingo-cli send command, so it must contain only
+  // the base58/bech32 characters a real Zcash address uses — no quotes,
+  // whitespace or control characters that could break out of that command.
+  const validAddress =
+    typeof z_address === "string" &&
+    z_address.length >= 8 &&
+    z_address.length <= 512 &&
+    /^[A-Za-z0-9]+$/.test(z_address);
+
+  if (!validAddress) {
+    return res.status(400).json({ error: "Invalid z_address" });
+  }
 
   try {
     if (typeof z_address !== "string" || !z_address.trim()) {
@@ -595,6 +624,19 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
 router.patch("/update-ua-address", authenticate, async (req, res) => {
   const { UA_address } = req.body;
 
+  // A mainnet unified address is bech32m: "u1" followed by lowercase base32
+  // characters only. Enforce the full charset (not just the "u1" prefix) so a
+  // quote/whitespace/control character can't reach the zingo-cli send command.
+  if (
+    typeof UA_address !== "string" ||
+    UA_address.length > 512 ||
+    !/^u1[a-z0-9]{10,}$/.test(UA_address)
+  ) {
+    return res.status(400).json({
+      error: "Invalid mainnet unified address",
+    });
+  }
+
   try {
     if (typeof UA_address !== "string" || !UA_address.trim().startsWith("u1")) {
       return res.status(400).json({
@@ -697,7 +739,7 @@ router.patch("/update-nickname", authenticate, async (req, res) => {
       deleteCacheByPattern("submissions:*"),
     ]);
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     res.json({ user: updated });
   } catch (error) {
@@ -746,7 +788,7 @@ router.patch("/select-role", authenticate, async (req, res) => {
 
     await delCache("users:all");
 
-    sendRealtimeUpdate("user_updated", updated, req.user.id);
+    sendUserUpdated(req.user.id, updated);
 
     const token = signSessionToken(updated);
 

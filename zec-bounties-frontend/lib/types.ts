@@ -142,6 +142,7 @@ export interface BountyApplication {
 
 export interface Bounty {
   id: string;
+  updatedAt?: Date | string;
   title: string;
   description: string;
   createdBy: string; // User ID
@@ -153,6 +154,8 @@ export interface Bounty {
   isApproved: boolean;
   isPaid: boolean;
   isPrivate: boolean;
+  suggestionReviewStatus?: "PENDING" | "APPROVED" | "DECLINED" | null;
+  suggestionReviewReason?: string | null;
   paymentAuthorized: boolean;
   paymentBatchId?: string;
   paidAt?: Date;
@@ -170,6 +173,7 @@ export interface Bounty {
   assignees?: BountyAssignee[];
   teamId?: string | null;
   team?: { id: string; name: string; logo?: string | null } | null;
+  targetRepo?: string | null;
 }
 
 // One row per bounty per payout attempt, from /api/transactions/records.
@@ -205,6 +209,8 @@ export interface BountyFormData {
   timeToComplete: Date;
   category: string;
   chain?: "MAIN" | "TEST";
+  teamId?: string;
+  targetRepo?: string | null;
 }
 
 export interface ZcashParamsFormData {
