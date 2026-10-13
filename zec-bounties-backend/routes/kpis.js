@@ -655,9 +655,24 @@ router.get(
           "50-tasks": 0,
         };
 
+                // Users with completions by this month
+        const seen = new Set();
         for (const [userId, completed] of userCumulative) {
           if (completed < 1) continue;
+          seen.add(userId);
           const star = effectiveStarKey(completed, userBadges.get(userId));
+          counts[star] = (counts[star] || 0) + 1;
+        }
+
+        // Users with an avatar override (even if completed is 0)
+        for (const [userId, badges] of userBadges) {
+          if (seen.has(userId)) continue;
+          const hasOverride =
+            Array.isArray(badges) &&
+            badges.some((b) => b.startsWith("avatar:"));
+          if (!hasOverride) continue;
+          const completed = userCumulative.get(userId) || 0;
+          const star = effectiveStarKey(completed, badges);
           counts[star] = (counts[star] || 0) + 1;
         }
 
