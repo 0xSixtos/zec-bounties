@@ -233,6 +233,8 @@ export function EditBountyModal({
   );
   const hasAddressWarning = selectedUsersWithoutAddress.length > 0;
 
+  if (currentUser?.role !== "ADMIN") return null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-hidden flex flex-col p-4">
