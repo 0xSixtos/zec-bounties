@@ -2875,8 +2875,12 @@ router.put("/:id", authenticate, async (req, res) => {
     // frozen once a payout is authorised, in flight, or done. Without this a
     // creator could repoint an approved payout to themselves or inflate the
     // amount before the batch runs.
+    // The edit forms re-send the current reward with every save, so an
+    // unchanged amount is not a payout edit.
     const editsPayoutFields =
-      req.body.assignee !== undefined || req.body.bountyAmount !== undefined;
+      req.body.assignee !== undefined ||
+      (req.body.bountyAmount !== undefined &&
+        Number(req.body.bountyAmount) !== Number(existing.bountyAmount));
     if (editsPayoutFields) {
       if (!(await canAdministerBounty(existing, req.user))) {
         return res.status(403).json({
