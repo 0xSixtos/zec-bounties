@@ -12,7 +12,7 @@ export default defineConfig({
     video: "on",
   },
   webServer: {
-    command: `yarn ${process.env.CI ? "start" : "dev"} --hostname 127.0.0.1 --port 3127`,
+    command: "yarn dev --hostname 127.0.0.1 --port 3127",
     url: "http://127.0.0.1:3127/home",
     reuseExistingServer: false,
     timeout: 120000,

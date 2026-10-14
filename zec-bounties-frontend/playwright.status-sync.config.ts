@@ -13,7 +13,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `yarn ${process.env.CI ? "start" : "dev"} --hostname 127.0.0.1 --port 3128`,
+    command: "yarn dev --hostname 127.0.0.1 --port 3128",
     url: "http://127.0.0.1:3128/home",
     reuseExistingServer: false,
     timeout: 120000,

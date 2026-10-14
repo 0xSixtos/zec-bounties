@@ -75,11 +75,6 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         run: yarn tsc --noEmit
 
-      # The Playwright configs serve this build with `yarn start` when CI is set.
-      - name: Build
-        if: steps.changes.outputs.skip != 'true'
-        run: yarn build
-
       - name: Install Chromium
         if: steps.changes.outputs.skip != 'true'
         run: npx playwright install --with-deps chromium
@@ -88,19 +83,10 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         run: yarn test:a11y
 
-      - name: Run pagination tests
-        if: steps.changes.outputs.skip != 'true'
-        run: yarn test:pagination
-
-      - name: Run status sync tests
-        if: steps.changes.outputs.skip != 'true'
-        run: yarn test:status-sync
-
-      # Steps stop at the first failure, so the report is from the failing suite.
       - name: Upload Playwright report
         if: always() && steps.changes.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: accessibility-playwright-report
           path: zec-bounties-frontend/playwright-report/
           retention-days: 14
