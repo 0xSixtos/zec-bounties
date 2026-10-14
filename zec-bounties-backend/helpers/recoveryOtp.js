@@ -22,9 +22,9 @@ function safeEqual(a, b) {
 }
 
 // In-memory, single-use OTP store keyed by user id. Each code expires, is
-// consumed on the first correct match (replay protection) and is burned after
-// too many wrong guesses (brute-force protection). A burned code also locks the
-// key for LOCKOUT_MS, so a new code cannot be requested to keep guessing.
+// consumed on the first correct match (replay protection). Wrong guesses are
+// counted per key across codes for LOCKOUT_MS, so requesting a new code does not
+// reset the count; MAX_ATTEMPTS of them lock the key for LOCKOUT_MS.
 // Checks and the delete run synchronously, so concurrent verify calls for one
 // key cannot both succeed.
 class OtpStore {
@@ -35,6 +35,7 @@ class OtpStore {
     this.lockoutMs = options.lockoutMs ?? LOCKOUT_MS;
     this.store = new Map();
     this.locks = new Map();
+    this.failures = new Map();
   }
 
   // Milliseconds left on the key's lockout, or 0 when it is not locked.
@@ -50,7 +51,19 @@ class OtpStore {
 
   lock(key, now) {
     this.store.delete(key);
+    this.failures.delete(key);
     this.locks.set(key, now + this.lockoutMs);
+  }
+
+  // Counts a wrong guess and returns the total inside the current window.
+  recordFailure(key, now) {
+    let entry = this.failures.get(key);
+    if (!entry || now - entry.since >= this.lockoutMs) {
+      entry = { count: 0, since: now };
+      this.failures.set(key, entry);
+    }
+    entry.count += 1;
+    return entry.count;
   }
 
   // Issues a code unless the key is locked or one was sent within the cooldown
@@ -65,7 +78,7 @@ class OtpStore {
       return { error: "cooldown", retryAfterMs: this.resendCooldownMs - (now - existing.issuedAt) };
     }
     const otp = generateOtp();
-    this.store.set(key, { otp, issuedAt: now, expiresAt: now + this.ttlMs, attempts: 0 });
+    this.store.set(key, { otp, issuedAt: now, expiresAt: now + this.ttlMs });
     return { otp };
   }
 
@@ -83,21 +96,17 @@ class OtpStore {
       return { status: "expired" };
     }
 
-    if (record.attempts >= this.maxAttempts) {
-      this.lock(key, now);
-      return { status: "locked", retryAfterMs: this.lockoutMs };
-    }
-
     if (!safeEqual(record.otp, typeof candidate === "string" ? candidate : "")) {
-      record.attempts += 1;
-      if (record.attempts >= this.maxAttempts) {
+      const failures = this.recordFailure(key, now);
+      if (failures >= this.maxAttempts) {
         this.lock(key, now);
         return { status: "locked", retryAfterMs: this.lockoutMs };
       }
-      return { status: "incorrect", attemptsLeft: this.maxAttempts - record.attempts };
+      return { status: "incorrect", attemptsLeft: this.maxAttempts - failures };
     }
 
     this.store.delete(key);
+    this.failures.delete(key);
     return { status: "ok" };
   }
 

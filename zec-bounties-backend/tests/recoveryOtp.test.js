@@ -116,6 +116,40 @@ describe("OtpStore lockout", () => {
     assert.equal(result.retryAfterMs, 500);
   });
 
+  it("keeps counting wrong guesses when a new code is requested", () => {
+    const store = new OtpStore({ resendCooldownMs: 0 });
+    const { otp } = store.issue("u1", 0);
+    const wrong = otp === "000000" ? "111111" : "000000";
+    for (let i = 1; i < MAX_ATTEMPTS; i++) store.verify("u1", wrong, 0);
+    const next = store.issue("u1", 1).otp;
+    const wrongNext = next === "000000" ? "111111" : "000000";
+    assert.equal(store.verify("u1", wrongNext, 2).status, "locked");
+    assert.equal(store.issue("u1", 3).error, "locked");
+  });
+
+  it("forgets wrong guesses after the lockout window", () => {
+    const store = new OtpStore({ resendCooldownMs: 0 });
+    const { otp } = store.issue("u1", 0);
+    const wrong = otp === "000000" ? "111111" : "000000";
+    for (let i = 1; i < MAX_ATTEMPTS; i++) store.verify("u1", wrong, 0);
+    const next = store.issue("u1", LOCKOUT_MS).otp;
+    const wrongNext = next === "000000" ? "111111" : "000000";
+    const result = store.verify("u1", wrongNext, LOCKOUT_MS);
+    assert.equal(result.status, "incorrect");
+    assert.equal(result.attemptsLeft, MAX_ATTEMPTS - 1);
+  });
+
+  it("clears wrong guesses after a correct code", () => {
+    const store = new OtpStore({ resendCooldownMs: 0 });
+    const { otp } = store.issue("u1", 0);
+    const wrong = otp === "000000" ? "111111" : "000000";
+    for (let i = 1; i < MAX_ATTEMPTS; i++) store.verify("u1", wrong, 0);
+    assert.equal(store.verify("u1", otp, 1).status, "ok");
+    const next = store.issue("u1", 2).otp;
+    const wrongNext = next === "000000" ? "111111" : "000000";
+    assert.equal(store.verify("u1", wrongNext, 3).attemptsLeft, MAX_ATTEMPTS - 1);
+  });
+
   it("locks only the key that was burned", () => {
     const store = new OtpStore();
     burn(store, 0);
