@@ -45,13 +45,9 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run pagination tests
-        run: yarn test:pagination
+      - name: Run browser tests
+        run: yarn test:browser
 
-      - name: Run status sync tests
-        run: yarn test:status-sync
-
-      # Steps stop at the first failure, so the report is from the failing suite.
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v4

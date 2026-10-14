@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { Backend, admin, bounty, cards, column, copy, creator, hunter, loadTwenty, pill } from "./fixtures";
+import { APP_URL, Backend, admin, bounty, cards, column, copy, creator, hunter, loadTwenty, pill } from "./fixtures";
 
 test("All Bounties already moves a loaded card on a direct status event", async ({ page }) => {
   const api = new Backend(25);
@@ -83,7 +83,7 @@ for (const path of ["/home", "/my-bounties"]) {
     api.staleDetails.set(target.id, copy(target));
     await api.open(page, path);
     if (path === "/home") await loadTwenty(page);
-    const other = await browser.newPage({ baseURL: "http://127.0.0.1:3128", serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
+    const other = await browser.newPage({ baseURL: APP_URL, serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
     try {
       await api.open(other, "/home", creator);
       await loadTwenty(other);
@@ -152,7 +152,7 @@ test("direct status mutations update the actor and My Bounties, ignoring older e
   const api = new Backend();
   api.rows[0] = bounty(1, "TO_DO");
   await api.open(page, "/admin", admin);
-  const viewer = await browser.newPage({ baseURL: "http://127.0.0.1:3128", serviceWorkers: "block" });
+  const viewer = await browser.newPage({ baseURL: APP_URL, serviceWorkers: "block" });
   try {
     await api.open(viewer, "/my-bounties");
     const pagesBefore = api.listCalls(page).length;
@@ -189,7 +189,7 @@ for (const path of ["/home", "/my-bounties"]) {
       submitterUser: hunter, status: "needs_revision", submittedAt: new Date(Date.now() - 3600000).toISOString(),
       description: "Initial work", deliverableUrl: "https://example.invalid/work", reviewNotes: "Please update this work" }];
     await api.open(page, path);
-    const other = await browser.newPage({ baseURL: "http://127.0.0.1:3128", serviceWorkers: "block" });
+    const other = await browser.newPage({ baseURL: APP_URL, serviceWorkers: "block" });
     try {
       await api.open(other, "/my-bounties", creator);
       await page.getByText("Status bounty 1", { exact: true }).click();
@@ -221,7 +221,7 @@ for (const action of ["Approve", "Revise", "Reject"]) {
       description: "Fixture ready for review", deliverableUrl: "https://example.invalid/work" }];
     await api.open(page, "/admin", admin);
     const viewers = await Promise.all(["/home", "/my-bounties"].map(async path => {
-      const viewer = await browser.newPage({ baseURL: "http://127.0.0.1:3128", serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
+      const viewer = await browser.newPage({ baseURL: APP_URL, serviceWorkers: "block", viewport: { width: 1280, height: 900 } });
       await api.open(viewer, path);
       if (path === "/home") await loadTwenty(viewer);
       return viewer;
