@@ -12,19 +12,19 @@ const DEFAULT_SERVER_URLS = [
   "https://testnet.zec.rocks:443",
 ];
 
-// Same origin as an allowed entry; path, query and credentials are refused.
+// The raw value goes to zingo-cli, so it must match this exact shape. The URL
+// parser alone accepts tabs, percent-encoding and other forms it rewrites.
+const SERVER_URL_PATTERN = /^https?:\/\/[A-Za-z0-9.-]+(:[1-9][0-9]{0,4})?\/?$/;
+
 function normalizeServerUrl(value) {
-  if (typeof value !== "string") return null;
-  let url;
+  if (typeof value !== "string" || !SERVER_URL_PATTERN.test(value)) {
+    return null;
+  }
   try {
-    url = new URL(value.trim());
+    return new URL(value).origin;
   } catch {
     return null;
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-  if (url.username || url.password || url.search || url.hash) return null;
-  if (url.pathname !== "/") return null;
-  return url.origin;
 }
 
 // Operators add servers with ZCASH_ALLOWED_SERVER_URLS (comma-separated).
@@ -36,7 +36,12 @@ function allowedServerOrigins(env = process.env) {
     env.ZCASH_VERIFICATION_SERVER,
     ...extra,
   ];
-  return new Set(urls.map(normalizeServerUrl).filter(Boolean));
+  return new Set(
+    urls
+      .map((url) => (typeof url === "string" ? url.trim() : url))
+      .map(normalizeServerUrl)
+      .filter(Boolean),
+  );
 }
 
 // Checks only the fields that are present. Returns an error message or null.
