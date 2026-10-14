@@ -56,6 +56,7 @@ function loadRoutes(prisma) {
     "../helpers/validateBounty": require("../../helpers/validateBounty"),
 "../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
     "../utils/userSelects": require("../../utils/userSelects"),
+    "../utils/privacy": require("../../utils/privacy"),
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../utils/bountyHelpers": helpers,
     "../utils/bountyActivity": { logActivity: noOp },
