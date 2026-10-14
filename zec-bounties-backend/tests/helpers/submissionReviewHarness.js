@@ -56,6 +56,7 @@ function loadSubmissionReviewRoute(prisma) {
     "../utils/constants": {},
     "../helpers/validateBounty": {},
     "../utils/userSelects": require("../../utils/userSelects"),
+    "../utils/privacy": require("../../utils/privacy"),
     "../utils/bountyHelpers": helpers,
     "../utils/userIdentity": require("../../utils/userIdentity"),
   });

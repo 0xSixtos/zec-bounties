@@ -59,6 +59,7 @@ function loadSubmissionEditRoute(prisma) {
     "../helpers/validateBounty": {},
 "../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
     "../utils/userSelects": require("../../utils/userSelects"),
+    "../utils/privacy": require("../../utils/privacy"),
     "../utils/bountyHelpers": helpers,
   });
   return {
