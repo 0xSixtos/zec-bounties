@@ -48,7 +48,6 @@ const {
   requireOnboarded,
   createBountyWithQuota,
   WeeklyBountyQuotaError,
-  getWeeklyBountyQuota,
   requireTaskCreation,
 } = require("../utils/bountyHelpers");
 
@@ -793,13 +792,6 @@ router.post(
           .status(403)
           .json({ error: "You are not a member of this team" });
       }
-      const quota = await getWeeklyBountyQuota(req.user.id);
-      if (quota.remaining <= 0) {
-        return res.status(429).json({
-          error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
-          ...quota,
-        });
-      }
     }
 
     const TARGET_REPOS = new Set([
@@ -819,7 +811,7 @@ router.post(
     const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
     const resolvedAssignee =
       canAssignOthers && assignee !== "none" ? assignee : null;
-    const bounty = await prisma.bounty.create({
+    const bounty = await createBountyWithQuota(req.user, {
       data: {
         title,
         description,
