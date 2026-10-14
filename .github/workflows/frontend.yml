@@ -38,7 +38,9 @@ jobs:
         id: changes
         if: github.event_name == 'pull_request'
         run: |
-          changed=$(git diff --name-only HEAD^1 HEAD | grep -v '\.md$' || true)
+          # A separate assignment, so a failed diff fails the step instead of skipping.
+          files=$(git diff --name-only HEAD^1 HEAD)
+          changed=$(grep -v '\.md$' <<<"$files" || true)
           if grep -qE '^(zec-bounties-frontend/|\.github/workflows/frontend\.yml$)' <<<"$changed"; then
             exit 0
           fi

@@ -77,6 +77,10 @@ function loadRoutes(prisma) {
     }, { filename });
     return module.exports;
   }
+  const activity = load("utils/bountyActivity.js", {
+    "../prisma/client": prisma, "../middleware/websocket": { sendToUser: noOp },
+    "./userSelects": require(path.join(backend, "utils/userSelects")),
+  });
   const helpers = load("utils/bountyHelpers.js", {
     "../prisma/client": prisma, "./cache": cache, "./sendMail": noOp, "./notifyUser": noOp,
     "../middleware/websocket": { sendRealtimeUpdate: (...args) => broadcasts.push(json(args)) },
@@ -96,7 +100,12 @@ function loadRoutes(prisma) {
     "../utils/userSelects": require(path.join(backend, "utils/userSelects")),
     "../utils/privacy": require(path.join(backend, "utils/privacy")),
     "../utils/bountySuggestionReview": require(path.join(backend, "utils/bountySuggestionReview")),
-    "../utils/bountyActivity": { logActivity: noOp, publishActivity: noOp },
+    // Real activity rows. Passing a client skips the unawaited fan-out, which
+    // could outlive the test schema.
+    "../utils/bountyActivity": {
+      logActivity: (client, entry) => activity.logActivity(client ?? prisma, entry),
+      publishActivity: noOp,
+    },
     "../utils/bountyHelpers": helpers,
   });
   for (const key of ["post /apply", "put /applications/:applicationId", "delete /applications/:applicationId"])

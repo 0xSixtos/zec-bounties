@@ -48,7 +48,6 @@ const {
   requireOnboarded,
   createBountyWithQuota,
   WeeklyBountyQuotaError,
-  getWeeklyBountyQuota,
   requireTaskCreation,
 } = require("../utils/bountyHelpers");
 
@@ -792,13 +791,6 @@ router.post(
         return res
           .status(403)
           .json({ error: "You are not a member of this team" });
-      }
-      const quota = await getWeeklyBountyQuota(req.user.id);
-      if (quota.remaining <= 0) {
-        return res.status(429).json({
-          error: `Weekly bounty creation limit reached (${quota.limit} per week)`,
-          ...quota,
-        });
       }
     }
 
