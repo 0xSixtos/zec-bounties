@@ -534,6 +534,16 @@ router.delete("/params/:accountName", authenticate, async (req, res) => {
       });
     }
 
+    // A team wallet copy shares the team's wallet directory. Deleting it goes
+    // through DELETE /api/teams/:teamId/wallet, which also clears every
+    // member's copy.
+    if (existing.teamId) {
+      return res.status(403).json({
+        success: false,
+        message: "The team owner can delete a team wallet from the team page",
+      });
+    }
+
     const chain = existing.chain || "mainnet";
     const serverUrl = existing.serverUrl || "http://127.0.0.1:8137";
     const dataDir = getWalletDataDir(existing.walletId);
