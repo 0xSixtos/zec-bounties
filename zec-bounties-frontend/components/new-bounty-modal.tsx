@@ -139,7 +139,13 @@ export function NewBountyModal({
     setFieldErrors(nextErrors);
 
     const firstInvalid = (
-      ["title", "team", "category", "reward", "description"] as (keyof FieldErrors)[]
+      [
+        "title",
+        "team",
+        "category",
+        "reward",
+        "description",
+      ] as (keyof FieldErrors)[]
     ).find((field) => Boolean(nextErrors[field]));
 
     if (firstInvalid) {
@@ -182,7 +188,7 @@ export function NewBountyModal({
         timeToComplete: new Date(),
         category: "",
         teamId: "",
-    targetRepo: "",
+        targetRepo: "",
       });
     } catch (error: any) {
       toast.error("Failed to create bounty", {
@@ -311,7 +317,10 @@ export function NewBountyModal({
             {/* Category + Reward */}
             {isHunter && (
               <div className="space-y-2">
-                <Label htmlFor="team" className="flex items-center gap-2 text-sm font-medium">
+                <Label
+                  htmlFor="team"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
                   <Users className="h-3.5 w-3.5 text-muted-foreground" />
                   Team
                 </Label>
@@ -322,7 +331,11 @@ export function NewBountyModal({
                     clearFieldError("team");
                   }}
                 >
-                  <SelectTrigger id="team" className="h-11 rounded-xl" aria-invalid={Boolean(fieldErrors.team)}>
+                  <SelectTrigger
+                    id="team"
+                    className="h-11 rounded-xl"
+                    aria-invalid={Boolean(fieldErrors.team)}
+                  >
                     <SelectValue placeholder="Choose a verified team" />
                   </SelectTrigger>
                   <SelectContent>
