@@ -508,6 +508,13 @@ router.post("/recovery/request-otp", authenticate, async (req, res) => {
 
     const issued = otpStore.issue(req.user.id);
 
+    if (issued.error === "locked") {
+      return res.status(429).json({
+        error: "Too many incorrect attempts. Please try again later.",
+        retryAfterMs: issued.retryAfterMs,
+      });
+    }
+
     if (issued.error === "cooldown") {
       return res.status(429).json({
         error: "An OTP was sent recently. Please wait before requesting another.",
@@ -552,8 +559,9 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
   }
 
   if (result.status === "locked") {
-    return res.status(401).json({
-      error: "Too many incorrect attempts. Request a new one.",
+    return res.status(429).json({
+      error: "Too many incorrect attempts. Please try again later.",
+      retryAfterMs: result.retryAfterMs,
     });
   }
 

@@ -8,6 +8,9 @@ const {
   AUTH_USER_SELECT,
 } = require("../middleware/auth");
 const { isSettableMemberRole } = require("../helpers/teamRoles");
+const {
+  validateWalletConnection,
+} = require("../helpers/zcash/walletConnection");
 const { initZcashOnce, initZcashOnceForTeams } = require("../zcash/init");
 const {
   sendRealtimeUpdate,
@@ -1883,6 +1886,11 @@ router.post("/:teamId/wallet", authenticate, async (req, res) => {
       });
     }
 
+    const connectionError = validateWalletConnection({ chain, serverUrl });
+    if (connectionError) {
+      return res.status(400).json({ error: connectionError });
+    }
+
     const existing = await prisma.teamWallet.findUnique({
       where: {
         teamId,
@@ -2020,6 +2028,11 @@ router.post("/:teamId/wallet/import", authenticate, async (req, res) => {
       return res.status(400).json({
         error: "Seed phrase must be 24 words",
       });
+    }
+
+    const connectionError = validateWalletConnection({ chain, serverUrl });
+    if (connectionError) {
+      return res.status(400).json({ error: connectionError });
     }
 
     const existing = await prisma.teamWallet.findUnique({
