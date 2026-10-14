@@ -819,7 +819,7 @@ router.post(
     const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
     const resolvedAssignee =
       canAssignOthers && assignee !== "none" ? assignee : null;
-    const bounty = await prisma.bounty.create({
+    const bounty = await createBountyWithQuota(req.user, {
       data: {
         title,
         description,
