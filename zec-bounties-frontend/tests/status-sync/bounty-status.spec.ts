@@ -91,7 +91,7 @@ for (const path of ["/home", "/my-bounties"]) {
       await page.getByText(target.title, { exact: true }).click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel("What did you deliver?").fill("Completed the fixture task.");
-      await dialog.getByLabel("Link to your work").fill("https://example.invalid/work");
+      await dialog.getByLabel("Link 1", { exact: true }).fill("https://example.invalid/work");
       await dialog.getByRole("button", { name: "Submit work", exact: true }).click();
       await expect(dialog.getByText("Work submitted", { exact: true })).toBeVisible();
       if (path === "/home") {

@@ -75,6 +75,11 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         run: yarn tsc --noEmit
 
+      # The Playwright configs serve this build with `yarn start` when CI is set.
+      - name: Build
+        if: steps.changes.outputs.skip != 'true'
+        run: yarn build
+
       - name: Install Chromium
         if: steps.changes.outputs.skip != 'true'
         run: npx playwright install --with-deps chromium

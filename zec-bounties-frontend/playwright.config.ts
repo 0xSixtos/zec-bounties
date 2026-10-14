@@ -36,7 +36,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: "yarn dev",
+    // CI builds once and serves the production build, so no page compiles during a test.
+    command: process.env.CI ? "yarn start --hostname 127.0.0.1" : "yarn dev",
     url: "http://127.0.0.1:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120000,
