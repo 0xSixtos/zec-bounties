@@ -13,6 +13,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useTaskCreationBlocked } from "@/hooks/use-task-creation-blocked";
 
 interface MobileNavShellProps {
   children: React.ReactNode;
@@ -30,7 +31,7 @@ export function MobileNavShell({
   const pathname = usePathname();
   const [isNewBountyModalOpen, setIsNewBountyModalOpen] = useState(false);
   const [isTeamsSheetOpen, setIsTeamsSheetOpen] = useState(false);
-  const taskCreationBlocked = currentUser?.canCreateTasks === false;
+  const taskCreationBlocked = useTaskCreationBlocked();
 
   const handleNewBounty = () => {
     if (taskCreationBlocked) {
@@ -54,7 +55,8 @@ export function MobileNavShell({
   };
 
   const handleOpenTeams = onOpenTeams ?? (() => setIsTeamsSheetOpen(true));
-  const isTeamsActive = teamsActive !== undefined ? teamsActive : !!activeTeamId;
+  const isTeamsActive =
+    teamsActive !== undefined ? teamsActive : !!activeTeamId;
 
   return (
     <div className="pb-20 md:pb-0">
