@@ -124,10 +124,6 @@ export function NewBountyModal({
       nextErrors.category = "Select a category.";
     }
 
-    if (isHunter && !formData.teamId) {
-      nextErrors.team = "Choose the team this suggestion is for.";
-    }
-
     if (!formData.bountyAmount || formData.bountyAmount <= 0) {
       nextErrors.reward = "Enter a reward amount greater than 0.";
     }
@@ -141,7 +137,6 @@ export function NewBountyModal({
     const firstInvalid = (
       [
         "title",
-        "team",
         "category",
         "reward",
         "description",
@@ -173,11 +168,13 @@ export function NewBountyModal({
     try {
       await createBounty({
         ...formData,
-        ...(isHunter ? { teamId: formData.teamId } : {}),
+        teamId: formData.teamId || undefined,
       });
       toast.success(isHunter ? "Suggestion sent" : "Bounty created!", {
         description: isHunter
-          ? `"${formData.title}" was sent to the selected team for review.`
+          ? formData.teamId
+            ? `"${formData.title}" was sent to the selected team for review.`
+            : `"${formData.title}" was submitted for platform review.`
           : `"${formData.title}" is now live.`,
       });
       onSuccess?.();
@@ -322,11 +319,12 @@ export function NewBountyModal({
                   className="flex items-center gap-2 text-sm font-medium"
                 >
                   <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                  Team
+                  Team <span className="font-normal text-muted-foreground">(optional)</span>
                 </Label>
                 <Select
-                  value={formData.teamId}
-                  onValueChange={(teamId) => {
+                  value={formData.teamId || "none"}
+                  onValueChange={(value) => {
+                    const teamId = value === "none" ? "" : value;
                     setFormData((prev) => ({ ...prev, teamId }));
                     clearFieldError("team");
                   }}
@@ -336,9 +334,10 @@ export function NewBountyModal({
                     className="h-11 rounded-xl"
                     aria-invalid={Boolean(fieldErrors.team)}
                   >
-                    <SelectValue placeholder="Choose a verified team" />
+                    <SelectValue placeholder="None (platform review)" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="none">None (platform admins)</SelectItem>
                     {communities.map((team) => (
                       <SelectItem key={team.id} value={team.id}>
                         {team.name}
