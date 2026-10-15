@@ -31,6 +31,7 @@ import { ProtectedRoute } from "@/components/auth/protected-route";
 import { FavoriteTeamsSidebar } from "@/components/favorite-teams-sidebar";
 import { HeroCarousel } from "@/components/hero-carousel";
 import { MobileNavShell } from "@/components/layout/mobile-nav-shell";
+import { useTaskCreationBlocked } from "@/hooks/use-task-creation-blocked";
 // import { useRoleGuard } from "@/hooks/use-role-guard";
 
 const KANBAN_COLUMNS: {
@@ -93,6 +94,7 @@ const STATUS_ORDER: BountyStatus[] = [
 ];
 
 function HomeContent() {
+  const taskCreationBlocked = useTaskCreationBlocked();
   const {
     bounties,
     currentUser,
@@ -111,7 +113,9 @@ function HomeContent() {
   const searchParams = useSearchParams();
 
   const [activeCategory, setActiveCategory] = useState("All");
-  const [activeRepo, setActiveRepo] = useState<RepoId | "all" | "untagged">("all");
+  const [activeRepo, setActiveRepo] = useState<RepoId | "all" | "untagged">(
+    "all",
+  );
   const [viewMode, setViewMode] = useState<"grid" | "list" | "defrag">("grid");
   const [searchQuery, setSearchQuery] = useState("");
   const [isNewBountyModalOpen, setIsNewBountyModalOpen] = useState(false);
@@ -194,7 +198,6 @@ function HomeContent() {
   }, [filteredBounties]);
 
   const missingUA = !currentUser?.UA_address;
-  const taskCreationBlocked = currentUser?.canCreateTasks === false;
 
   // Open a bounty and reflect it in the URL
   const openBounty = (bounty: Bounty) => {
@@ -407,7 +410,11 @@ function HomeContent() {
               ))}
             </div>
 
-            <RepoFilter value={activeRepo} onChange={setActiveRepo} counts={repoCounts} />
+            <RepoFilter
+              value={activeRepo}
+              onChange={setActiveRepo}
+              counts={repoCounts}
+            />
 
             <div className="space-y-6 min-w-0 flex-1">
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pb-3 sm:pb-4 border-b">
