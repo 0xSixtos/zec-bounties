@@ -174,7 +174,7 @@ export function NewBountyModal({
         description: isHunter
           ? formData.teamId
             ? `"${formData.title}" was sent to the selected team for review.`
-            : `"${formData.title}" was submitted for platform review.`
+            : `"${formData.title}" was submitted for review.`
           : `"${formData.title}" is now live.`,
       });
       onSuccess?.();
@@ -334,10 +334,10 @@ export function NewBountyModal({
                     className="h-11 rounded-xl"
                     aria-invalid={Boolean(fieldErrors.team)}
                   >
-                    <SelectValue placeholder="None (platform review)" />
+                    <SelectValue placeholder="None" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">None (platform admins)</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
                     {communities.map((team) => (
                       <SelectItem key={team.id} value={team.id}>
                         {team.name}
@@ -395,7 +395,12 @@ export function NewBountyModal({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="targetRepo">Repository</Label>
+                <Label
+                  htmlFor="targetRepo"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
+                  Repository
+                </Label>
                 <Select
                   value={formData.targetRepo || "none"}
                   onValueChange={(value) =>
@@ -405,7 +410,7 @@ export function NewBountyModal({
                     }))
                   }
                 >
-                  <SelectTrigger id="targetRepo" className="w-full">
+                  <SelectTrigger id="targetRepo" className="h-11 w-full rounded-xl">
                     <SelectValue placeholder="Select repository" />
                   </SelectTrigger>
                   <SelectContent>
