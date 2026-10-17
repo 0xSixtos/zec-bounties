@@ -10,6 +10,7 @@ const { delCache, bumpVersion } = require("./cache");
 const sendMail = require("./sendMail");
 const notifyUser = require("./notifyUser");
 const { sendRealtimeUpdate } = require("../middleware/websocket");
+const { redactBroadcastPayload } = require("./privacy");
 
 // ─── Email settings ─────────────────────────────────────────────────────
 const ENABLE_EMAILS_IN_DEV = false; // Set to true when you want to test emails
@@ -113,7 +114,7 @@ async function broadcastTeamEvent(
       recipients = await getBroadcastRecipients({ isPrivate: true, teamId });
     }
 
-    sendRealtimeUpdate(type, payload, excludeUserId, recipients);
+    sendRealtimeUpdate(type, redactBroadcastPayload(payload), excludeUserId, recipients);
   } catch (err) {
     console.error(`Realtime ${type} for team ${teamId} not sent:`, err);
   }
@@ -132,7 +133,7 @@ async function broadcastBountyEvent(type, payload, bountyId, excludeUserId) {
     });
     if (!bounty) return;
     const recipients = await getBroadcastRecipients(bounty);
-    sendRealtimeUpdate(type, payload, excludeUserId, recipients);
+    sendRealtimeUpdate(type, redactBroadcastPayload(payload), excludeUserId, recipients);
   } catch (err) {
     console.error(`Realtime ${type} for bounty ${bountyId} not sent:`, err);
   }
