@@ -36,11 +36,15 @@ function mergeVisibility(raw) {
 function redactPublicUser(user, { forceFull = false } = {}) {
   if (!user) return null;
   if (forceFull) {
+    // Admin-only: addresses are selected solely for admins (USER_SELECT_FULL).
+    // Non-admin path below never includes them.
     return {
       id: user.id,
       name: user.name ?? null,
       nickname: user.nickname ?? null,
       avatar: user.avatar ?? null,
+      z_address: user.z_address ?? null,
+      UA_address: user.UA_address ?? null,
     };
   }
 
