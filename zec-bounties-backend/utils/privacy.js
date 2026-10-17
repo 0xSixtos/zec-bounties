@@ -105,9 +105,41 @@ function redactLeaderboardRow(row, user, { forceFull = false } = {}) {
   };
 }
 
+
+// Fields that must never leave the server on a broadcast. sendToUser is
+// exempt (owner-only). Applied at every broadcast boundary so a FULL select
+// on an HTTP response cannot leak through the websocket payload.
+const BROADCAST_PRIVATE_FIELDS = new Set([
+  "email",
+  "password",
+  "z_address",
+  "UA_address",
+  "githubId",
+  "discordUserId",
+  "emailNotifications",
+  "pushNotifications",
+  "ofacVerified",
+  "profileVisibility",
+]);
+
+function redactBroadcastPayload(value) {
+  if (Array.isArray(value)) return value.map(redactBroadcastPayload);
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    const out = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (BROADCAST_PRIVATE_FIELDS.has(key)) continue;
+      out[key] = redactBroadcastPayload(child);
+    }
+    return out;
+  }
+  return value;
+}
+
 module.exports = {
   DEFAULT_VISIBILITY,
   mergeVisibility,
   redactPublicUser,
   redactLeaderboardRow,
+  redactBroadcastPayload,
+  BROADCAST_PRIVATE_FIELDS,
 };

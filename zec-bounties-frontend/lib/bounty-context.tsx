@@ -547,6 +547,11 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
   const fetchStatsReqId = useRef(0);
   const bountyUpdates = useRef(new Map<string, Bounty>());
 
+  const mergeForViewer = (current: Bounty, update: Bounty) =>
+  mergeBounty(current, update, {
+    preservePayoutAddresses: currentUser?.role === "ADMIN",
+  });
+
   const reconcileFetchedBounties = (
     incoming: Bounty[],
     updatesAtStart: Map<string, Bounty>,
@@ -558,19 +563,19 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
       return update &&
         (update !== updatesAtStart.get(bounty.id) ||
           bountyUpdatedAt(update) > bountyUpdatedAt(bounty))
-        ? mergeBounty(bounty, update)
+        ? mergeForViewer(bounty, update)
         : bounty;
     });
 
   const applyBountyUpdate = (update: Bounty) => {
     if (!update.updatedAt) return;
     const previous = bountyUpdates.current.get(update.id);
-    const latest = mergeBounty(previous ?? update, update);
+    const latest = mergeForViewer(previous ?? update, update);
     if (latest === previous) return;
     bountyUpdates.current.set(update.id, latest);
     const patch = (list: Bounty[]) =>
       list.map((bounty) =>
-        bounty.id === latest.id ? mergeBounty(bounty, latest) : bounty,
+        bounty.id === latest.id ? mergeForViewer(bounty, latest) : bounty,
       );
     setBounties(patch);
     setMyBounties(patch);
@@ -1636,7 +1641,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
       return {
         ...prev,
         [bounty.teamId!]: list.map((b) =>
-          b.id === bounty.id ? mergeBounty(b, bounty) : b,
+          b.id === bounty.id ? mergeForViewer(b, bounty) : b,
         ),
       };
     });
