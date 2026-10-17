@@ -351,7 +351,9 @@ router.get(
           monthlyData.set(monthKey, new Set());
         }
 
-        monthlyData.get(monthKey).add(bounty.assignee);
+        if (bounty.assignee != null) {
+          monthlyData.get(monthKey).add(bounty.assignee);
+        }
       });
 
       const result = [];
