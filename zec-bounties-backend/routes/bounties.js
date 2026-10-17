@@ -35,7 +35,6 @@ const {
   USER_SELECT_FULL,
   USER_SELECT_WITH_ROLE,
   bountyUserSelects,
-  USER_SELECT_BASIC,
   USER_SELECT_MINIMAL,
   USER_SELECT_EXPORT,
 } = require("../utils/userSelects");
@@ -1323,7 +1322,7 @@ router.post("/:id/submit", authenticate, async (req, res) => {
           });
           const activityRow = await tx.bountyActivity.create({
             data: { bountyId, actorId: userId, type: "WORK_SUBMITTED" },
-            include: { actor: { select: USER_SELECT_BASIC } },
+            include: { actor: { select: USER_SELECT } },
           });
           return { workSubmission, updatedBounty, activityRow };
         }, { isolationLevel: "Serializable" });
@@ -1439,7 +1438,7 @@ router.get("/:id/submissions", authenticate, async (req, res) => {
       },
       include: {
         submitterUser: {
-          select: USER_SELECT_BASIC,
+          select: USER_SELECT,
         },
       },
       orderBy: { submittedAt: "desc" },
@@ -1470,7 +1469,7 @@ router.get("/submissions/all", authenticate, isAdmin, async (req, res) => {
     const submissions = await prisma.workSubmission.findMany({
       include: {
         submitterUser: {
-          select: USER_SELECT_BASIC,
+          select: USER_SELECT,
         },
       },
       orderBy: { submittedAt: "desc" },
@@ -2210,7 +2209,7 @@ router.get("/:bountyId/applications", authenticate, async (req, res) => {
       where: { bountyId },
       include: {
         applicantUser: {
-          select: USER_SELECT_BASIC,
+          select: USER_SELECT,
         },
       },
       orderBy: { appliedAt: "desc" },
@@ -2770,7 +2769,7 @@ router.get("/:id/activity", authenticate, async (req, res) => {
       where: { bountyId: bounty.id },
       orderBy: { createdAt: "desc" },
       take: 200,
-      include: { actor: { select: USER_SELECT_BASIC } },
+      include: { actor: { select: USER_SELECT } },
     });
     res.json(activity);
   } catch (err) {
