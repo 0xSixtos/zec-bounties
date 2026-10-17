@@ -838,7 +838,6 @@ router.post(
               id: true,
               name: true,
               nickname: true,
-              email: true,
               role: true,
               avatar: true,
             },
@@ -851,15 +850,7 @@ router.post(
             },
           },
           assigneeUser: {
-            select: {
-              id: true,
-              name: true,
-              nickname: true,
-              email: true,
-              avatar: true,
-              z_address: true,
-              UA_address: true,
-            },
+            select: { id: true, name: true, nickname: true, avatar: true },
           },
           team: { select: { id: true, name: true, logo: true } },
         },
@@ -2978,13 +2969,7 @@ router.get("/:teamId/applications", authenticate, async (req, res) => {
       },
       include: {
         applicantUser: {
-          select: {
-            id: true,
-            name: true,
-            nickname: true,
-            email: true,
-            avatar: true,
-          },
+          select: { id: true, name: true, nickname: true, avatar: true },
         },
         bounty: {
           select: {
@@ -3034,13 +3019,7 @@ router.get("/:teamId/submissions", authenticate, async (req, res) => {
       },
       include: {
         submitterUser: {
-          select: {
-            id: true,
-            name: true,
-            nickname: true,
-            email: true,
-            avatar: true,
-          },
+          select: { id: true, name: true, nickname: true, avatar: true },
         },
         bounty: {
           select: {
