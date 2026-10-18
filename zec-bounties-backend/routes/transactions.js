@@ -64,7 +64,9 @@ async function defaultWalletParams(userId, { create = true } = {}) {
 }
 
 const noWallet = (res) =>
-  res.status(404).json({ success: false, message: "No Zcash wallet available" });
+  res
+    .status(404)
+    .json({ success: false, message: "No Zcash wallet available" });
 
 // List transactions (Admin)
 router.get("/", authenticate, isAdmin, async (req, res) => {
@@ -341,7 +343,12 @@ router.post("/authorize-payment", authenticate, isAdmin, async (req, res) => {
       // release the claim so these bounties become payable again.
       console.error("❌ Zingo payment error:", sendResult.error);
 
-      await releaseClaim(batchKey, payableIds, sendResult.error, sendResult.raw);
+      await releaseClaim(
+        batchKey,
+        payableIds,
+        sendResult.error,
+        sendResult.raw,
+      );
 
       return res.status(422).json({
         success: false,
@@ -528,7 +535,11 @@ router.post("/records/:id/resolve", authenticate, isAdmin, async (req, res) => {
           where: { id: record.id, status: "UNKNOWN" },
           data:
             outcome === "broadcast"
-              ? { status: "BROADCAST", txid: txid.trim().toLowerCase(), settledAt }
+              ? {
+                  status: "BROADCAST",
+                  txid: txid.trim().toLowerCase(),
+                  settledAt,
+                }
               : {
                   status: "FAILED",
                   settledAt,

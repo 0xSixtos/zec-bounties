@@ -38,7 +38,10 @@ const executeZingoCliSync = require("../utils/zingo/zingoLibSync");
 const { randomUUID } = require("crypto");
 const { uploadToPinata, pinataUrl } = require("../utils/ipfs/pinata");
 const { REQUIRED_TEAM_VERIFICATIONS } = require("../utils/constants");
-const { validateBountyCreate, validateCategory } = require("../helpers/validateBounty");
+const {
+  validateBountyCreate,
+  validateCategory,
+} = require("../helpers/validateBounty");
 const { bountyUserSelects } = require("../utils/userSelects");
 const { notifyNewBounty } = require("../utils/discord/discordNotify");
 const {
@@ -368,6 +371,14 @@ async function getTeamDonationAddress(teamId) {
     console.error("Failed to read team donation address:", err);
     return null;
   }
+}
+
+async function isCommunityMember(teamId, userId) {
+  const fav = await prisma.teamFavorite.findUnique({
+    where: { userId_teamId: { userId, teamId } },
+    select: { userId: true },
+  });
+  return Boolean(fav);
 }
 
 // ─── Team CRUD ───────────────────────────────────────────────────────────────
@@ -710,10 +721,8 @@ router.get("/:teamId/bounties", optionalAuthenticate, async (req, res) => {
     const cached = await getCache(cacheKey);
     if (cached) return res.json(cached);
 
-    const {
-      user: assigneeUserSelect,
-      createdByUser: createdByUserSelect,
-    } = bountyUserSelects({ isAuthed, isAdmin });
+    const { user: assigneeUserSelect, createdByUser: createdByUserSelect } =
+      bountyUserSelects({ isAuthed, isAdmin });
 
     const [bounties, total] = await Promise.all([
       prisma.bounty.findMany({
@@ -750,14 +759,14 @@ router.post(
 
       const { teamId } = req.params;
 
-    if (req.user.role !== "ADMIN") {
-      const membership = await getTeamMember(teamId, req.user.id);
-      if (!membership) {
-        return res
-          .status(403)
-          .json({ error: "You are not a member of this team" });
+      if (req.user.role !== "ADMIN") {
+        const membership = await getTeamMember(teamId, req.user.id);
+        if (!membership) {
+          return res
+            .status(403)
+            .json({ error: "You are not a member of this team" });
+        }
       }
-    }
       const team = await prisma.team.findUnique({ where: { id: teamId } });
       if (!team) return res.status(404).json({ error: "Team not found" });
 
@@ -767,77 +776,79 @@ router.post(
         });
       }
 
-        const {
-      title,
-      description,
-      bountyAmount,
-      timeToComplete,
-      assignee,
-      categoryId,
-      chain,
-      targetRepo,
-    } = req.body;
-
-    const validation = validateBountyCreate(req.body);
-    if (!validation.valid) return res.status(400).json({ error: validation.error });
-    const categoryValidation = await validateCategory(prisma, categoryId);
-    if (!categoryValidation.valid) {
-      return res.status(400).json({ error: categoryValidation.error });
-    }
-    if (chain && !["MAIN", "TEST"].includes(chain)) {
-      return res.status(400).json({ error: "Invalid chain value" });
-    }
-
-    if (req.user.role !== "ADMIN") {
-      const membership = await getTeamMember(teamId, req.user.id);
-      if (!membership) {
-        return res
-          .status(403)
-          .json({ error: "You are not a member of this team" });
-      }
-    }
-
-    const TARGET_REPOS = new Set([
-      "namada",
-      "zechub",
-      "zechub-wiki",
-      "zec-bounties",
-    ]);
-    if (
-      targetRepo != null &&
-      targetRepo !== "" &&
-      !TARGET_REPOS.has(targetRepo)
-    ) {
-      return res.status(400).json({ error: "Invalid targetRepo" });
-    }
-
-    const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
-    const resolvedAssignee =
-      canAssignOthers && assignee !== "none" ? assignee : null;
-    const bounty = await createBountyWithQuota(req.user, {
-      data: {
+      const {
         title,
         description,
-        bountyAmount: parseFloat(bountyAmount),
-        timeToComplete: new Date(timeToComplete),
-        createdBy: req.user.id,
-        assignee: resolvedAssignee,
-        isApproved: true,
-        categoryId: categoryId || null,
-        ...(chain && { chain }),
-        ...(targetRepo && { targetRepo }),
-        teamId,
-        isPrivate: team.isPrivate,
-        ...(resolvedAssignee && {
-          assignees: { create: { userId: resolvedAssignee } },
-        }),
-      },
+        bountyAmount,
+        timeToComplete,
+        assignee,
+        categoryId,
+        chain,
+        targetRepo,
+      } = req.body;
+
+      const validation = validateBountyCreate(req.body);
+      if (!validation.valid)
+        return res.status(400).json({ error: validation.error });
+      const categoryValidation = await validateCategory(prisma, categoryId);
+      if (!categoryValidation.valid) {
+        return res.status(400).json({ error: categoryValidation.error });
+      }
+      if (chain && !["MAIN", "TEST"].includes(chain)) {
+        return res.status(400).json({ error: "Invalid chain value" });
+      }
+
+      if (req.user.role !== "ADMIN") {
+        const membership = await getTeamMember(teamId, req.user.id);
+        if (!membership) {
+          return res
+            .status(403)
+            .json({ error: "You are not a member of this team" });
+        }
+      }
+
+      const TARGET_REPOS = new Set([
+        "namada",
+        "zechub",
+        "zechub-wiki",
+        "zec-bounties",
+      ]);
+      if (
+        targetRepo != null &&
+        targetRepo !== "" &&
+        !TARGET_REPOS.has(targetRepo)
+      ) {
+        return res.status(400).json({ error: "Invalid targetRepo" });
+      }
+
+      const canAssignOthers = ["ADMIN", "TEAM"].includes(req.user.role);
+      const resolvedAssignee =
+        canAssignOthers && assignee !== "none" ? assignee : null;
+      const bounty = await createBountyWithQuota(req.user, {
+        data: {
+          title,
+          description,
+          bountyAmount: parseFloat(bountyAmount),
+          timeToComplete: new Date(timeToComplete),
+          createdBy: req.user.id,
+          assignee: resolvedAssignee,
+          isApproved: true,
+          categoryId: categoryId || null,
+          ...(chain && { chain }),
+          ...(targetRepo && { targetRepo }),
+          teamId,
+          isPrivate: team.isPrivate,
+          ...(resolvedAssignee && {
+            assignees: { create: { userId: resolvedAssignee } },
+          }),
+        },
         include: {
           createdByUser: {
             select: {
               id: true,
               name: true,
               nickname: true,
+              email: true,
               role: true,
               avatar: true,
             },
@@ -850,7 +861,15 @@ router.post(
             },
           },
           assigneeUser: {
-            select: { id: true, name: true, nickname: true, avatar: true },
+            select: {
+              id: true,
+              name: true,
+              nickname: true,
+              email: true,
+              avatar: true,
+              z_address: true,
+              UA_address: true,
+            },
           },
           team: { select: { id: true, name: true, logo: true } },
         },
@@ -916,19 +935,20 @@ router.post(
                 }),
               ),
             ),
-        ]);
-      } catch (notificationErr) {
-        console.error("Team bounty notification failed:", notificationErr);
+          ]);
+        } catch (notificationErr) {
+          console.error("Team bounty notification failed:", notificationErr);
+        }
+      })();
+    } catch (err) {
+      if (err instanceof WeeklyBountyQuotaError) {
+        return res.status(429).json({ error: err.message, ...err.quota });
       }
-    })();
-  } catch (err) {
-    if (err instanceof WeeklyBountyQuotaError) {
-      return res.status(429).json({ error: err.message, ...err.quota });
+      console.error(err);
+      res.status(500).json({ error: "Failed to create bounty" });
     }
-    console.error(err);
-    res.status(500).json({ error: "Failed to create bounty" });
-  }
-});
+  },
+);
 
 // ─── Favorites ───────────────────────────────────────────────────────────────
 
@@ -985,7 +1005,10 @@ router.post("/:teamId/favorite", authenticate, async (req, res) => {
       },
     });
 
-    await deleteCacheByPattern("bounties:*");
+    await Promise.all([
+      deleteCacheByPattern("bounties:*"),
+      bumpVersion("bounties"),
+    ]);
 
     sendToUser(req.user.id, "team_favorited", {
       teamId,
@@ -1019,6 +1042,11 @@ router.delete("/:teamId/favorite", authenticate, async (req, res) => {
       })
       .catch(() => {});
 
+    await Promise.all([
+      deleteCacheByPattern("bounties:*"),
+      bumpVersion("bounties"),
+    ]);
+
     sendToUser(req.user.id, "team_unfavorited", {
       teamId,
     });
@@ -1041,11 +1069,11 @@ router.delete("/:teamId/favorite", authenticate, async (req, res) => {
 
 router.get("/community", authenticate, async (req, res) => {
   try {
-    const memberships = await prisma.communityMember.findMany({
+    const favs = await prisma.teamFavorite.findMany({
       where: { userId: req.user.id },
       select: { teamId: true },
     });
-    res.json({ communities: memberships.map((m) => m.teamId) });
+    res.json({ communities: favs.map((f) => f.teamId) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch communities" });
@@ -1177,46 +1205,46 @@ router.delete("/:teamId/verify", authenticate, async (req, res) => {
   }
 });
 
-router.post("/:teamId/community/join", authenticate, async (req, res) => {
-  try {
-    const { teamId } = req.params;
-    const team = await prisma.team.findUnique({ where: { id: teamId } });
-    if (!team) return res.status(404).json({ error: "Team not found" });
+// router.post("/:teamId/community/join", authenticate, async (req, res) => {
+//   try {
+//     const { teamId } = req.params;
+//     const team = await prisma.team.findUnique({ where: { id: teamId } });
+//     if (!team) return res.status(404).json({ error: "Team not found" });
 
-    await prisma.communityMember.upsert({
-      where: { teamId_userId: { teamId, userId: req.user.id } },
-      update: {},
-      create: { teamId, userId: req.user.id },
-    });
+//     await prisma.communityMember.upsert({
+//       where: { teamId_userId: { teamId, userId: req.user.id } },
+//       update: {},
+//       create: { teamId, userId: req.user.id },
+//     });
 
-    sendToUser(req.user.id, "community_joined", { teamId });
-    res.status(201).json({ success: true, teamId });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to join community" });
-  }
-});
+//     sendToUser(req.user.id, "community_joined", { teamId });
+//     res.status(201).json({ success: true, teamId });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: "Failed to join community" });
+//   }
+// });
 
-router.delete("/:teamId/community/leave", authenticate, async (req, res) => {
-  try {
-    const { teamId } = req.params;
-    await prisma.communityMember
-      .delete({ where: { teamId_userId: { teamId, userId: req.user.id } } })
-      .catch(() => {});
-    sendToUser(req.user.id, "community_left", { teamId });
-    res.json({ success: true, teamId });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to leave community" });
-  }
-});
+// router.delete("/:teamId/community/leave", authenticate, async (req, res) => {
+//   try {
+//     const { teamId } = req.params;
+//     await prisma.communityMember
+//       .delete({ where: { teamId_userId: { teamId, userId: req.user.id } } })
+//       .catch(() => {});
+//     sendToUser(req.user.id, "community_left", { teamId });
+//     res.json({ success: true, teamId });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: "Failed to leave community" });
+//   }
+// });
 
 router.get("/:teamId/community/members", authenticate, async (req, res) => {
   try {
     const { teamId } = req.params;
     if (!(await requireTeamAdmin(teamId, req, res))) return;
 
-    const members = await prisma.communityMember.findMany({
+    const favs = await prisma.teamFavorite.findMany({
       where: { teamId },
       include: {
         user: {
@@ -1229,9 +1257,17 @@ router.get("/:teamId/community/members", authenticate, async (req, res) => {
           },
         },
       },
-      orderBy: { joinedAt: "desc" },
+      orderBy: { createdAt: "desc" },
     });
-    res.json({ success: true, members });
+    res.json({
+      success: true,
+      members: favs.map((f) => ({
+        teamId: f.teamId,
+        userId: f.userId,
+        joinedAt: f.createdAt,
+        user: f.user,
+      })),
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch community members" });
@@ -2969,7 +3005,13 @@ router.get("/:teamId/applications", authenticate, async (req, res) => {
       },
       include: {
         applicantUser: {
-          select: { id: true, name: true, nickname: true, avatar: true },
+          select: {
+            id: true,
+            name: true,
+            nickname: true,
+            email: true,
+            avatar: true,
+          },
         },
         bounty: {
           select: {
@@ -3019,7 +3061,13 @@ router.get("/:teamId/submissions", authenticate, async (req, res) => {
       },
       include: {
         submitterUser: {
-          select: { id: true, name: true, nickname: true, avatar: true },
+          select: {
+            id: true,
+            name: true,
+            nickname: true,
+            email: true,
+            avatar: true,
+          },
         },
         bounty: {
           select: {
@@ -3101,11 +3149,11 @@ router.post(
       await invalidateTeamBounties(teamId);
 
       await broadcastTeamEvent(
-      "team_updated",
-      serializeTeam(updated),
-      updated.id,
-      req.user.id,
-    );
+        "team_updated",
+        serializeTeam(updated),
+        updated.id,
+        req.user.id,
+      );
       res.json({
         success: true,
         logo: toMediaUrl(cid),
@@ -3222,11 +3270,11 @@ router.post(
       await invalidateTeamBounties(teamId);
 
       await broadcastTeamEvent(
-      "team_updated",
-      serializeTeam(updated),
-      updated.id,
-      req.user.id,
-    );
+        "team_updated",
+        serializeTeam(updated),
+        updated.id,
+        req.user.id,
+      );
       res.json({
         success: true,
         banner: toMediaUrl(cid),
