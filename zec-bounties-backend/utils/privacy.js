@@ -95,16 +95,15 @@ function redactLeaderboardRow(row, user, { forceFull = false } = {}) {
     id: row.id,
     rank: row.rank,
     name: showName
-      ? user?.name ?? row.name ?? "Unknown"
+      ? (user?.name ?? row.name ?? "Unknown")
       : "Anonymous contributor",
-    nickname: showName ? user?.nickname ?? null : null,
-    avatar: showAvatar ? user?.avatar ?? null : null,
+    nickname: showName ? (user?.nickname ?? null) : null,
+    avatar: showAvatar ? (user?.avatar ?? null) : null,
     completed: showCompleted ? row.completed : null,
     earned: showEarnings ? row.earned : null,
     points: showCompleted && showEarnings ? row.points : null,
   };
 }
-
 
 // Fields that must never leave the server on a broadcast. sendToUser is
 // exempt (owner-only). Applied at every broadcast boundary so a FULL select

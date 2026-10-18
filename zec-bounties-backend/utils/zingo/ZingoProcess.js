@@ -458,42 +458,42 @@ class ZingoProcess {
   }
 
   balance(command, timeout = 180000) {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
+    return new Promise((resolve, reject) => {
+      let buffer = "";
 
-    const onData = (chunk) => {
-      buffer += chunk.toString();
-      const clean = buffer.replace(/\u001b\[[0-9;]*m/g, "");
-      const jsonText = parseZingoBalance(clean);
+      const onData = (chunk) => {
+        buffer += chunk.toString();
+        const clean = buffer.replace(/\u001b\[[0-9;]*m/g, "");
+        const jsonText = parseZingoBalance(clean);
 
-      if (jsonText && jsonText !== "{}") {
+        if (jsonText && jsonText !== "{}") {
+          cleanup();
+          resolve(JSON.parse(jsonText));
+        }
+      };
+
+      const onError = (err) => {
         cleanup();
-        resolve(JSON.parse(jsonText));
-      }
-    };
+        reject(err);
+      };
 
-    const onError = (err) => {
-      cleanup();
-      reject(err);
-    };
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.proc.stdout.off("data", onData);
+        this.proc.stderr.off("data", onError);
+      };
 
-    const cleanup = () => {
-      clearTimeout(timer);
-      this.proc.stdout.off("data", onData);
-      this.proc.stderr.off("data", onError);
-    };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Zingo command timeout"));
+      }, timeout);
 
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error("Zingo command timeout"));
-    }, timeout);
+      this.proc.stdout.on("data", onData);
+      this.proc.stderr.on("data", onError);
 
-    this.proc.stdout.on("data", onData);
-    this.proc.stderr.on("data", onError);
-
-    this.proc.stdin.write(assertFixedCommand(command) + "\n");
-  });
-}
+      this.proc.stdin.write(assertFixedCommand(command) + "\n");
+    });
+  }
 
   parseAddress(zaddress, timeout = 30000) {
     return new Promise((resolve, reject) => {

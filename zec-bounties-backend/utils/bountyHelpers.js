@@ -242,17 +242,20 @@ async function createBountyWithQuota(user, args) {
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return await prisma.$transaction(async (tx) => {
-        // Use one timestamp for the quota window and inserted row, including
-        // when a retry crosses Monday 00:00 UTC.
-        const dateCreated = new Date();
-        const quota = await getWeeklyBountyQuota(user.id, tx, dateCreated);
-        if (quota.remaining <= 0) throw new WeeklyBountyQuotaError(quota);
-        return tx.bounty.create({
-          ...args,
-          data: { ...args.data, dateCreated },
-        });
-      }, { isolationLevel: "Serializable" });
+      return await prisma.$transaction(
+        async (tx) => {
+          // Use one timestamp for the quota window and inserted row, including
+          // when a retry crosses Monday 00:00 UTC.
+          const dateCreated = new Date();
+          const quota = await getWeeklyBountyQuota(user.id, tx, dateCreated);
+          if (quota.remaining <= 0) throw new WeeklyBountyQuotaError(quota);
+          return tx.bounty.create({
+            ...args,
+            data: { ...args.data, dateCreated },
+          });
+        },
+        { isolationLevel: "Serializable" },
+      );
     } catch (error) {
       // Prisma reports serialization conflicts/deadlocks as P2034. Retry the
       // entire check, so a losing request observes the newly consumed slot.

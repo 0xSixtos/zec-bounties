@@ -16,10 +16,7 @@ const app = express();
 const server = createServer(app);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
-const allowedOrigins = [
-  FRONTEND_URL,
-
-];
+const allowedOrigins = [FRONTEND_URL];
 
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
