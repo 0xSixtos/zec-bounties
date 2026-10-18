@@ -548,9 +548,9 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
   const bountyUpdates = useRef(new Map<string, Bounty>());
 
   const mergeForViewer = (current: Bounty, update: Bounty) =>
-  mergeBounty(current, update, {
-    preservePayoutAddresses: currentUser?.role === "ADMIN",
-  });
+    mergeBounty(current, update, {
+      preservePayoutAddresses: currentUser?.role === "ADMIN",
+    });
 
   const reconcileFetchedBounties = (
     incoming: Bounty[],
@@ -2569,6 +2569,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
               // A team payout must also refresh that team's payment records.
               if (msg.payload.teamId) {
                 fetchTeamPaymentRecords(msg.payload.teamId);
+                fetchTeamBounties(msg.payload.teamId);
               }
             }
             break;
@@ -2848,6 +2849,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
             break;
           case "team_favorited":
             setFavoriteTeamIds((prev) => new Set(prev).add(msg.payload.teamId));
+            fetchBounties();
             break;
 
           case "team_unfavorited":
@@ -2856,9 +2858,13 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
               next.delete(msg.payload.teamId);
               return next;
             });
-            break;
+            setActiveTeamId((cur) => (cur === msg.payload.teamId ? null : cur));
+            setTeamBounties((prev) => {
+              const { [msg.payload.teamId]: _drop, ...rest } = prev;
+              return rest;
+            });
+
             fetchBounties();
-            fetchUsers();
             break;
 
           case "team_transactions_fetched":
@@ -3431,6 +3437,14 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error("Failed to delete bounty");
 
       setBounties((prev) => prev.filter((bounty) => bounty.id !== id));
+      setTeamBounties((prev) =>
+        Object.fromEntries(
+          Object.entries(prev).map(([k, v]) => [
+            k,
+            v.filter((b) => b.id !== id),
+          ]),
+        ),
+      );
     } catch (error) {
       console.error("Failed to delete bounty:", error);
       throw error;
