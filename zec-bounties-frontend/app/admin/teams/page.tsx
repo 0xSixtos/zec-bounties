@@ -196,9 +196,10 @@ function displayUrl(href: string) {
   try {
     const u = new URL(href);
     const path = u.pathname === "/" ? "" : u.pathname.replace(/\/$/, "");
-    return u.hostname.replace(/^www\./, "") + path;
+    const text = u.hostname.replace(/^www\./, "") + path;
+    return text.length > 60 ? text.slice(0, 57) + "…" : text;
   } catch {
-    return href;
+    return href.length > 60 ? href.slice(0, 57) + "…" : href;
   }
 }
 
@@ -216,7 +217,9 @@ function OverviewCard({
   className?: string;
 }) {
   return (
-    <section className={`rounded-2xl border bg-card/50 ${className}`}>
+    <section
+      className={`min-w-0 overflow-hidden rounded-2xl border bg-card/50 ${className}`}
+    >
       <div className="flex items-center justify-between gap-2 px-4 pt-4 sm:px-5">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
@@ -282,16 +285,17 @@ function TeamVerificationModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-md rounded-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Shield className="h-5 w-5" />
-            Verify {team.name}
+      <DialogContent className="flex max-h-[85dvh] w-[calc(100vw-1.5rem)] max-w-[calc(100vw-1.5rem)] flex-col gap-4 overflow-hidden rounded-xl p-4 sm:max-w-md md:p-6">
+        <DialogHeader className="shrink-0 text-left sm:text-left">
+          <DialogTitle className="flex min-w-0 items-center gap-2 text-base md:text-lg">
+            <Shield className="h-5 w-5 shrink-0" />
+            <span className="truncate">Verify {team.name}</span>
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <p className="text-sm text-muted-foreground">
+        {/* Scrolls inside the modal when there are many links */}
+        <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden">
+          <p className="text-xs leading-relaxed text-muted-foreground md:text-sm">
             {total > 0
               ? "Open each of the team's links and make sure they look legitimate before verifying."
               : "This team has no social links. You can still verify it, but consider whether that's enough."}
@@ -302,7 +306,7 @@ function TeamVerificationModal({
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>Links reviewed</span>
-                  <span>
+                  <span className="tabular-nums">
                     {done}/{total}
                   </span>
                 </div>
@@ -314,7 +318,7 @@ function TeamVerificationModal({
                 </div>
               </div>
 
-              <div className="grid gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 {links.map(({ key, label, href, icon: Icon }) => {
                   const visited = clicked.has(key);
                   return (
@@ -325,7 +329,7 @@ function TeamVerificationModal({
                       rel="noopener noreferrer"
                       onClick={() => markClicked(key)}
                       onAuxClick={() => markClicked(key)} // middle-click
-                      className={`group flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition-colors ${
+                      className={`group flex min-w-0 items-center gap-3 rounded-xl border px-3 py-3 text-sm transition-colors active:bg-muted/60 ${
                         visited
                           ? "border-green-500/30 bg-green-500/5"
                           : "hover:border-primary/40 hover:bg-muted/40"
@@ -338,17 +342,15 @@ function TeamVerificationModal({
                       />
                       <div className="min-w-0 flex-1">
                         <div className="text-xs font-medium">{label}</div>
-                        <div className="truncate text-xs text-muted-foreground">
-                          {href}
+                        <div className="truncate text-[11px] text-muted-foreground md:text-xs">
+                          {displayUrl(href)}
                         </div>
                       </div>
                       {visited ? (
-                        <Badge
-                          variant="outline"
-                          className="shrink-0 gap-1 text-[10px] bg-green-500/10 text-green-600 border-green-500/30"
-                        >
-                          <Check className="h-2.5 w-2.5" /> Visited
-                        </Badge>
+                        <span className="flex shrink-0 items-center gap-1 rounded-full border border-green-500/30 bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600">
+                          <Check className="h-2.5 w-2.5" />
+                          <span className="hidden imd:inline">Visited</span>
+                        </span>
                       ) : (
                         <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 group-hover:text-primary" />
                       )}
@@ -360,22 +362,23 @@ function TeamVerificationModal({
           )}
         </div>
 
-        <DialogFooter className="flex-row gap-2 sm:flex-row">
+        {/* Stacked + full-width on mobile, side by side from md up */}
+        <DialogFooter className="shrink-0 flex-col-reverse gap-2 sm:flex-col-reverse md:flex-row md:justify-end">
           <Button
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={loading}
-            className="flex-1 sm:flex-none"
+            className="w-full md:w-auto"
           >
             Cancel
           </Button>
           <Button
             onClick={onConfirm}
             disabled={!allClicked || loading}
-            className="flex-1 sm:flex-none"
+            className="w-full md:w-auto"
           >
-            {loading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            {allClicked ? "Verify team" : `Visit all links (${done}/${total})`}
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {allClicked ? "Verify team" : `Visit all (${done}/${total})`}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -495,14 +498,14 @@ function LinksCard({ team }: { team: Team }) {
           This team hasn't added any links.
         </p>
       ) : (
-        <ul className="-mx-2 space-y-0.5">
+        <ul className="-mx-2 min-w-0 space-y-0.5">
           {links.map(({ key, label, href, icon: Icon }) => (
-            <li key={key}>
+            <li key={key} className="min-w-0">
               <a
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group flex items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60"
+                className="group flex min-w-0 items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60"
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition-colors group-hover:bg-primary/10 group-hover:text-primary">
                   <Icon className="h-4 w-4" />
@@ -541,7 +544,7 @@ function AboutCard({ team, onEdit }: { team: Team; onEdit: () => void }) {
       }
     >
       {team.description ? (
-        <p className="whitespace-pre-line text-sm leading-relaxed text-foreground/90">
+        <p className="whitespace-pre-line break-words text-sm leading-relaxed text-foreground/90">
           {team.description}
         </p>
       ) : (
@@ -732,12 +735,12 @@ function OverviewTab({
       </div>
 
       {/* Two-column body */}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <div className="space-y-4 lg:col-span-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+        <div className="min-w-0 space-y-4 lg:col-span-3">
           <AboutCard team={team} onEdit={onEdit} />
           <LinksCard team={team} />
         </div>
-        <div className="lg:col-span-2">
+        <div className="min-w-0 lg:col-span-2">
           <WalletPanel team={team} onAddWallet={onAddWallet} />
         </div>
       </div>
