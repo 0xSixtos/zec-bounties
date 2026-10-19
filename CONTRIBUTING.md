@@ -17,9 +17,13 @@ For large or risky changes (auth, payouts, privacy, schema, multi-file features)
 
 ## Getting paid
 
-Maintainers do not create bounties for you. To be paid, you open the bounty yourself:
+To be paid, the work needs an approved bounty. Maintainers do not create bounties for you, so you suggest one yourself if your account is allowed to.
 
-1. Create it on https://bounties.zechub.wiki
+Admins decide who can suggest: nobody (closed), any onboarded hunter (open), or hunters with at least a set number of completed bounties (threshold, 5 by default). If the New Bounty button is disabled, its tooltip tells you why. See [Bounty suggestions](docs/bounty-suggestions.md).
+
+To suggest a bounty:
+
+1. Click New Bounty on https://bounties.zechub.wiki
 2. Give it a clear title, description, and acceptance criteria
 3. Pick a ZEC amount from the bands in [Bounty amounts](docs/bounty-amounts.md)
 4. Link the PR (open or merged) as the deliverable
@@ -31,6 +35,8 @@ A maintainer will approve it, adjust the amount to the correct band, or decline 
 You can open the bounty before you start (recommended for large work) or after the PR is up. Team-user and admin-created bounties are approved on creation. Hunter suggestions stay pending until review. See [Task statuses](docs/task-statuses.md).
 
 After the bounty is Done, payouts are batched and usually go out the following Sunday to the UA in your Profile.
+
+If you cannot suggest bounties yet, you can still open the PR. Say in the description that you would like it considered for a contributor reward, and a maintainer will decide. Applying to open bounties on the board also builds your completed count.
 
 Duplicates of an existing bounty or PR are not paid, even if the code is fine.
 
