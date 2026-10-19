@@ -1,62 +1,69 @@
 /**
- * Fetch the prior calendar month's ZEC/USD from CoinGecko and upsert it.
+ * Rebuild zec_usd_monthly from the ZecHub wiki shielded stats JSON.
  *
- * Run on the 1st of each month (cron or node-cron):
+ * Source (weekly closes):
+ *   https://raw.githubusercontent.com/ZecHub/zechub-wiki/main/public/data/zcash/shieldedStatsJSON.json
+ *
+ * For each calendar month:
+ *   avg_usd   = mean of that month's weekly Closing_Price
+ *   close_usd = last weekly Closing_Price in the month
+ *   provisional = true if the month is the current calendar month
+ *
+ * Run on the 1st, or whenever the wiki file is updated:
  *   node scripts/fetch-zec-usd.js
  *
- * Uses the public CoinGecko market_chart endpoint. No API key required
- * for this volume. Stores avg of daily closes and the month-end close.
- *
- * Env: DATABASE_URL (Postgres, same as the app).
+ * Env: DATABASE_URL
  */
 
 const { PrismaClient } = require("@prisma/client");
 
-const COINGECKO =
-  "https://api.coingecko.com/api/v3/coins/zcash/market_chart?vs_currency=usd&days=40&interval=daily";
+const SOURCE_URL =
+  "https://raw.githubusercontent.com/ZecHub/zechub-wiki/main/public/data/zcash/shieldedStatsJSON.json";
 
-function monthKey(d) {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+function monthKey(year, monthIndex) {
+  return `${year}-${String(monthIndex + 1).padStart(2, "0")}-01`;
 }
 
 async function main() {
-  const now = new Date();
-  // Prior closed month.
-  const prior = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-  const target = monthKey(prior);
-  const targetYear = prior.getUTCFullYear();
-  const targetMonth = prior.getUTCMonth();
+  const res = await fetch(SOURCE_URL);
+  if (!res.ok) throw new Error(`wiki JSON ${res.status}`);
+  const rows = await res.json();
+  if (!Array.isArray(rows)) throw new Error("expected an array");
 
-  const res = await fetch(COINGECKO);
-  if (!res.ok) throw new Error(`CoinGecko ${res.status}`);
-  const data = await res.json();
-  const prices = data.prices || [];
-
-  const inMonth = prices.filter(([ts]) => {
-    const d = new Date(ts);
-    return d.getUTCFullYear() === targetYear && d.getUTCMonth() === targetMonth;
-  });
-  if (inMonth.length === 0) {
-    throw new Error(`No daily prices for ${target}`);
+  const byMonth = new Map();
+  for (const row of rows) {
+    const price = Number(row.Closing_Price);
+    if (!row.Dates || !Number.isFinite(price)) continue;
+    const [y, m, d] = row.Dates.split("/").map((n) => parseInt(n, 10));
+    if (!y || !m) continue;
+    const key = monthKey(y, m - 1);
+    if (!byMonth.has(key)) byMonth.set(key, []);
+    byMonth.get(key).push({ day: d, price });
   }
 
-  const avg = inMonth.reduce((s, [, p]) => s + p, 0) / inMonth.length;
-  const close = inMonth[inMonth.length - 1][1];
+  const now = new Date();
+  const currentKey = monthKey(now.getUTCFullYear(), now.getUTCMonth());
 
   const prisma = new PrismaClient();
   try {
-    await prisma.$executeRaw`
-      INSERT INTO zec_usd_monthly (month, avg_usd, close_usd, source, provisional, fetched_at)
-      VALUES (${target}::date, ${avg}, ${close}, 'coingecko', FALSE, now())
-      ON CONFLICT (month) DO UPDATE SET
-        avg_usd = EXCLUDED.avg_usd,
-        close_usd = EXCLUDED.close_usd,
-        provisional = FALSE,
-        fetched_at = now()
-    `;
-    console.log(
-      `upserted ${target}: avg=${avg.toFixed(2)} close=${close.toFixed(2)} days=${inMonth.length}`,
-    );
+    let n = 0;
+    for (const [month, items] of [...byMonth.entries()].sort()) {
+      const avg = items.reduce((s, i) => s + i.price, 0) / items.length;
+      const close = items[items.length - 1].price;
+      const provisional = month === currentKey;
+      await prisma.$executeRaw`
+        INSERT INTO zec_usd_monthly (month, avg_usd, close_usd, source, provisional, fetched_at)
+        VALUES (${month}::date, ${avg}, ${close}, 'zechub-wiki', ${provisional}, now())
+        ON CONFLICT (month) DO UPDATE SET
+          avg_usd = EXCLUDED.avg_usd,
+          close_usd = EXCLUDED.close_usd,
+          source = EXCLUDED.source,
+          provisional = EXCLUDED.provisional,
+          fetched_at = now()
+      `;
+      n++;
+    }
+    console.log(`upserted ${n} months from zechub-wiki`);
   } finally {
     await prisma.$disconnect();
   }
