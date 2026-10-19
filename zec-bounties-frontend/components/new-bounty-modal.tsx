@@ -293,7 +293,9 @@ export function NewBountyModal({
                     style={{
                       width: `${Math.min(
                         100,
-                        (eligibility.completed / eligibility.required) * 100,
+                        eligibility.required
+                          ? (eligibility.completed / eligibility.required) * 100
+                          : 0,
                       )}%`,
                     }}
                   />
