@@ -58,12 +58,12 @@ import {
   Eye,
   EyeOff,
   ArrowLeft,
-  XIcon,
   Link2,
   ExternalLink,
   Calendar,
 } from "lucide-react";
 import { RxDiscordLogo } from "react-icons/rx";
+import { FaXTwitter } from "react-icons/fa6";
 import type { Team } from "@/lib/types";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -176,7 +176,7 @@ function getTeamLinks(team: Team): TeamLink[] {
       key: "twitter",
       label: "X / Twitter",
       href: team.twitterUrl,
-      icon: XIcon,
+      icon: FaXTwitter,
     });
   if (team.discordUrl)
     links.push({
