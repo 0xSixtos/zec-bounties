@@ -1,5 +1,8 @@
 import { expect, type Page, type Route, type WebSocketRoute } from "@playwright/test";
 
+// Matches baseURL in playwright.browser.config.ts.
+export const APP_URL = "http://127.0.0.1:3127";
+
 export const hunter = { id: "sync-hunter", name: "Sync Hunter", role: "HUNTER", UA_address: "fixture-only" };
 export const creator = { ...hunter, id: "sync-creator", name: "Sync Creator" };
 export const admin = { ...hunter, id: "sync-admin", name: "Sync Admin", role: "ADMIN" };
@@ -84,11 +87,14 @@ export class Backend {
       localStorage.setItem("zecBountiesPushAttempted", String(Date.now()));
     }, user);
     await page.routeWebSocket("ws://localhost:9000/**", ws => this.sockets.set(page, ws));
+    await page.routeWebSocket("ws://localhost:9001/**", ws => this.sockets.set(page, ws));
     await page.route("**/*", async route => {
       const req = route.request();
       const url = new URL(req.url());
-      if (url.origin === "http://127.0.0.1:3128") return route.continue();
-      if (url.origin !== "http://localhost:9000") return route.abort();
+      if (url.origin === APP_URL) return route.continue();
+      if (!["http://localhost:9000", "http://localhost:9001"].includes(url.origin)) return route.abort();
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 204 });
+      if (req.method() === "OPTIONS") return route.fulfill({ status: 204 });
       const method = req.method();
       const pathname = url.pathname;
       const pageNumber = Number(url.searchParams.get("page")) || 1;

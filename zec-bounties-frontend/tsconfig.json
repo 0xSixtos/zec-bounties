@@ -39,6 +39,6 @@
     "node_modules",
     "tests",
     "playwright.config.ts",
-    "playwright.pagination.config.ts"
+    "playwright.browser.config.ts"
   ]
 }

@@ -59,6 +59,7 @@ export function NewBountyModal({
     fetchBountyQuota,
     communities,
     fetchCommunities,
+    favoriteTeamIds,
   } = useBounty();
 
   const [formData, setFormData] = useState({
@@ -94,8 +95,15 @@ export function NewBountyModal({
   const isAdmin = currentUser?.role === "ADMIN";
   const isHunter = currentUser?.role === "HUNTER";
   const blocked = currentUser?.canCreateTasks === false;
+  const eligibility = isHunter ? bountyQuota?.postEligibility : null;
+  const notEligible = eligibility?.allowed === false;
   const atLimit =
-    !isAdmin && bountyQuota?.remaining !== null && bountyQuota?.remaining === 0;
+    !isAdmin &&
+    !notEligible &&
+    bountyQuota?.remaining !== null &&
+    bountyQuota?.remaining === 0;
+
+  const joinedTeams = communities.filter((t) => favoriteTeamIds.has(t.id));
 
   const validateForm = () => {
     const nextErrors: FieldErrors = {};
@@ -104,6 +112,18 @@ export function NewBountyModal({
       toast.error("Task creation disabled", {
         description: "An admin has blocked your account from creating tasks.",
       });
+      return false;
+    }
+
+    if (notEligible && eligibility) {
+      const desc =
+        eligibility.mode === "closed"
+          ? "Bounty suggestions are currently closed."
+          : `Complete ${eligibility.required} bounties first (${eligibility.completed}/${eligibility.required} done).`;
+      toast.error(
+        eligibility.mode === "closed" ? "Suggestions closed" : "Not eligible to post yet",
+        { description: desc },
+      );
       return false;
     }
 
@@ -124,10 +144,6 @@ export function NewBountyModal({
       nextErrors.category = "Select a category.";
     }
 
-    if (isHunter && !formData.teamId) {
-      nextErrors.team = "Choose the team this suggestion is for.";
-    }
-
     if (!formData.bountyAmount || formData.bountyAmount <= 0) {
       nextErrors.reward = "Enter a reward amount greater than 0.";
     }
@@ -139,7 +155,7 @@ export function NewBountyModal({
     setFieldErrors(nextErrors);
 
     const firstInvalid = (
-      ["title", "team", "category", "reward", "description"] as (keyof FieldErrors)[]
+      ["title", "category", "reward", "description"] as (keyof FieldErrors)[]
     ).find((field) => Boolean(nextErrors[field]));
 
     if (firstInvalid) {
@@ -167,11 +183,13 @@ export function NewBountyModal({
     try {
       await createBounty({
         ...formData,
-        ...(isHunter ? { teamId: formData.teamId } : {}),
+        teamId: formData.teamId || undefined,
       });
       toast.success(isHunter ? "Suggestion sent" : "Bounty created!", {
         description: isHunter
-          ? `"${formData.title}" was sent to the selected team for review.`
+          ? formData.teamId
+            ? `"${formData.title}" was sent to the selected team for review.`
+            : `"${formData.title}" was submitted for review.`
           : `"${formData.title}" is now live.`,
       });
       onSuccess?.();
@@ -182,7 +200,7 @@ export function NewBountyModal({
         timeToComplete: new Date(),
         category: "",
         teamId: "",
-    targetRepo: "",
+        targetRepo: "",
       });
     } catch (error: any) {
       toast.error("Failed to create bounty", {
@@ -237,7 +255,7 @@ export function NewBountyModal({
                 Provide the details for your technical challenge.
               </DialogDescription>
             </div>
-            {!isAdmin && !blocked && bountyQuota && (
+            {!isAdmin && !blocked && !notEligible && bountyQuota && (
               <div className="inline-flex w-fit items-center gap-2 rounded-full border bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
                 <span
                   className={`h-2 w-2 rounded-full ${
@@ -251,6 +269,37 @@ export function NewBountyModal({
                       bountyQuota.limit === 1 ? "y" : "ies"
                     } left this week.`
                   : "You've reached your weekly bounty limit."}
+              </div>
+            )}
+
+            {notEligible && eligibility && (
+              <div
+                role="status"
+                className="space-y-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm"
+              >
+                <div className="flex items-center justify-between gap-2 font-medium">
+                  <span>
+                    {eligibility.mode === "closed"
+                      ? "Bounty suggestions are closed"
+                      : `Complete ${eligibility.required} bounties to post your own`}
+                  </span>
+                  <span className="tabular-nums">
+                    {eligibility.completed}/{eligibility.required}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-amber-500/20">
+                  <div
+                    className="h-full rounded-full bg-amber-500 transition-all"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        eligibility.required
+                          ? (eligibility.completed / eligibility.required) * 100
+                          : 0,
+                      )}%`,
+                    }}
+                  />
+                </div>
               </div>
             )}
 
@@ -311,22 +360,34 @@ export function NewBountyModal({
             {/* Category + Reward */}
             {isHunter && (
               <div className="space-y-2">
-                <Label htmlFor="team" className="flex items-center gap-2 text-sm font-medium">
+                <Label
+                  htmlFor="team"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
                   <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                  Team
+                  Team{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (optional)
+                  </span>
                 </Label>
                 <Select
-                  value={formData.teamId}
-                  onValueChange={(teamId) => {
+                  value={formData.teamId || "none"}
+                  onValueChange={(value) => {
+                    const teamId = value === "none" ? "" : value;
                     setFormData((prev) => ({ ...prev, teamId }));
                     clearFieldError("team");
                   }}
                 >
-                  <SelectTrigger id="team" className="h-11 rounded-xl" aria-invalid={Boolean(fieldErrors.team)}>
-                    <SelectValue placeholder="Choose a verified team" />
+                  <SelectTrigger
+                    id="team"
+                    className="h-11 rounded-xl"
+                    aria-invalid={Boolean(fieldErrors.team)}
+                  >
+                    <SelectValue placeholder="None" />
                   </SelectTrigger>
                   <SelectContent>
-                    {communities.map((team) => (
+                    <SelectItem value="none">None</SelectItem>
+                    {joinedTeams.map((team) => (
                       <SelectItem key={team.id} value={team.id}>
                         {team.name}
                       </SelectItem>
@@ -383,7 +444,12 @@ export function NewBountyModal({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="targetRepo">Repository</Label>
+                <Label
+                  htmlFor="targetRepo"
+                  className="flex items-center gap-2 text-sm font-medium"
+                >
+                  Repository
+                </Label>
                 <Select
                   value={formData.targetRepo || "none"}
                   onValueChange={(value) =>
@@ -393,7 +459,10 @@ export function NewBountyModal({
                     }))
                   }
                 >
-                  <SelectTrigger id="targetRepo" className="w-full">
+                  <SelectTrigger
+                    id="targetRepo"
+                    className="h-11 w-full rounded-xl"
+                  >
                     <SelectValue placeholder="Select repository" />
                   </SelectTrigger>
                   <SelectContent>
@@ -510,7 +579,7 @@ export function NewBountyModal({
             )}
             <Button
               type="submit"
-              disabled={isSubmitting || atLimit || blocked}
+              disabled={isSubmitting || atLimit || blocked || notEligible}
               className="h-11 w-full rounded-xl px-6 w-auto"
             >
               {isSubmitting ? (
@@ -520,6 +589,8 @@ export function NewBountyModal({
                 </>
               ) : blocked ? (
                 "Task creation disabled"
+              ) : notEligible ? (
+                `Complete ${eligibility?.required} bounties to post`
               ) : atLimit ? (
                 "Weekly limit reached"
               ) : (

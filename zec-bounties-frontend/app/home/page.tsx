@@ -36,13 +36,8 @@ import { formatStatus } from "@/lib/utils";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { FavoriteTeamsSidebar } from "@/components/favorite-teams-sidebar";
 import { HeroCarousel } from "@/components/hero-carousel";
-import { BottomTabBar } from "@/components/layout/bottom-tab-bar";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { MobileNavShell } from "@/components/layout/mobile-nav-shell";
+import { useTaskCreationBlocked } from "@/hooks/use-task-creation-blocked";
 // import { useRoleGuard } from "@/hooks/use-role-guard";
 
 const KANBAN_COLUMNS: {
@@ -105,6 +100,8 @@ const STATUS_ORDER: BountyStatus[] = [
 ];
 
 function HomeContent() {
+  const taskCreationBlocked = useTaskCreationBlocked();
+  const { bountyQuota } = useBounty();
   const {
     bounties,
     currentUser,
@@ -115,6 +112,11 @@ function HomeContent() {
     loadAllBounties,
     hasMoreBounties,
     fetchBountyById,
+    teamBounties,
+    teamBountiesLoading,
+    teamBountiesHasMore,
+    fetchTeamBounties,
+    loadMoreTeamBounties,
   } = useBounty();
 
   const router = useRouter();
@@ -133,7 +135,6 @@ function HomeContent() {
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const [isTeamsSheetOpen, setIsTeamsSheetOpen] = useState(false);
 
   const {
     category: activeCategory,
@@ -182,13 +183,27 @@ function HomeContent() {
     return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [communities, bounties]);
 
+  useEffect(() => {
+    if (activeTeamId) fetchTeamBounties(activeTeamId);
+  }, [activeTeamId]);
+
+  const sourceBounties = activeTeamId
+    ? (teamBounties[activeTeamId] ?? [])
+    : bounties;
+  const sourceLoading = activeTeamId
+    ? !!teamBountiesLoading[activeTeamId]
+    : bountiesLoading;
+  const sourceHasMore = activeTeamId
+    ? !!teamBountiesHasMore[activeTeamId]
+    : hasMoreBounties;
+
   const categoryFilteredBounties = useMemo(() => {
-    return filterAndSortBounties(bounties, {
+    return filterAndSortBounties(sourceBounties, {
       ...filters,
       repo: "all",
       sort: "newest",
     });
-  }, [bounties, filters]);
+  }, [sourceBounties, filters]);
 
   const repoCounts = useMemo(() => {
     const counts = {
@@ -207,8 +222,8 @@ function HomeContent() {
   }, [categoryFilteredBounties]);
 
   const filteredBounties = useMemo(
-    () => filterAndSortBounties(bounties, filters),
-    [bounties, filters],
+    () => filterAndSortBounties(sourceBounties, filters),
+    [sourceBounties, filters],
   );
 
   const kanbanGroups = useMemo(
@@ -232,7 +247,6 @@ function HomeContent() {
   }, [filteredBounties]);
 
   const missingUA = !currentUser?.UA_address;
-  const taskCreationBlocked = currentUser?.canCreateTasks === false;
 
   // Open a bounty and reflect it in the URL
   const openBounty = (bounty: Bounty) => {
@@ -253,17 +267,18 @@ function HomeContent() {
 
   const getCategoryCount = (name: string) =>
     name === "All"
-      ? bounties.length
-      : bounties.filter((b) => b.categoryId === name).length;
+      ? sourceBounties.length
+      : sourceBounties.filter((b) => b.categoryId === name).length;
 
   const handleLoadMore = useCallback(async () => {
     setIsLoadingMore(true);
     try {
-      await loadMoreBounties();
+      if (activeTeamId) await loadMoreTeamBounties(activeTeamId);
+      else await loadMoreBounties();
     } finally {
       setIsLoadingMore(false);
     }
-  }, [loadMoreBounties]);
+  }, [loadMoreBounties, loadMoreTeamBounties, activeTeamId]);
 
   const handleNewBounty = () => {
     if (taskCreationBlocked) {
@@ -290,7 +305,7 @@ function HomeContent() {
     filters.query.trim() !== "" ||
     filters.category !== "All" ||
     filters.repo !== "all" ||
-    filters.teamId !== "" ||
+   
     filters.minReward != null ||
     filters.maxReward != null ||
     filters.deadline !== "" ||
@@ -298,6 +313,7 @@ function HomeContent() {
     filters.sort !== "newest";
 
   useEffect(() => {
+    if (activeTeamId) return;
     if (!requiresCompleteResults) {
       filterLoadStarted.current = false;
       setFilterLoadError(false);
@@ -317,9 +333,10 @@ function HomeContent() {
     bountiesLoading,
     loadAllBounties,
     filterLoadRetry,
+    activeTeamId,
   ]);
 
-  const canLoadMore = hasMoreBounties && !requiresCompleteResults;
+  const canLoadMore = sourceHasMore && !requiresCompleteResults;
 
   useEffect(() => {
     if (!canLoadMore) return;
@@ -328,7 +345,7 @@ function HomeContent() {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !isLoadingMore && !bountiesLoading) {
+        if (entries[0].isIntersecting && !isLoadingMore && !sourceLoading) {
           handleLoadMore();
         }
       },
@@ -337,7 +354,7 @@ function HomeContent() {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [canLoadMore, isLoadingMore, bountiesLoading, handleLoadMore]);
+  }, [canLoadMore, isLoadingMore, sourceLoading, handleLoadMore]);
 
   // On load / when the URL param changes, open the matching bounty
   useEffect(() => {
@@ -363,37 +380,9 @@ function HomeContent() {
   }, [searchParams, bounties, fetchBountyById]);
 
   return (
-    <main className="min-h-screen bg-background text-foregroun pb-20 md:pb-0">
-      <Sheet open={isTeamsSheetOpen} onOpenChange={setIsTeamsSheetOpen}>
-        <SheetContent
-          side="bottom"
-          className="max-h-[70vh] overflow-y-auto p-4 py-6"
-        >
-          <SheetHeader>
-            <SheetTitle>Favorite Teams</SheetTitle>
-          </SheetHeader>
-          <div className="mt-4">
-            <FavoriteTeamsSidebar
-              activeTeamId={activeTeamId}
-              onSelectTeam={(id) => {
-                  updateFilter("teamId", id ?? "");
-                setIsTeamsSheetOpen(false); // close after picking, feels more native
-              }}
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      <BottomTabBar
-        onNewBounty={handleNewBounty}
-        newBountyBlocked={taskCreationBlocked}
-        onOpenTeams={() => setIsTeamsSheetOpen(true)}
-        teamsActive={!!activeTeamId}
-      />
-      <Navbar
-        searchQuery={searchQuery}
-        onSearchChange={(value) => updateFilter("query", value)}
-      />
+    <main className="min-h-screen bg-background text-foreground">
+      <Navbar  searchQuery={searchQuery}  onSearchChange={(value) => updateFilter("query", value)} />
+      
 
       <div className="xl:container xl:mx-auto px-3 imd:px-4 py-6 imd:py-8">
         <HeroCarousel onNewBounty={handleNewBounty} />
@@ -430,7 +419,11 @@ function HomeContent() {
             <Button
               title={
                 taskCreationBlocked
-                  ? "An admin has disabled task creation for your account"
+                  ? bountyQuota?.postEligibility?.mode === "closed"
+                    ? "Bounty suggestions are currently closed"
+                    : bountyQuota?.postEligibility?.allowed === false
+                      ? `Complete ${bountyQuota.postEligibility.required} bounties to post your own`
+                      : "An admin has disabled task creation for your account"
                   : undefined
               }
               className={`w-full sm:w-auto rounded-full shadow-lg shadow-primary/20 ${
@@ -732,7 +725,7 @@ function HomeContent() {
                 </div>
               </div>
 
-              {bountiesLoading && bounties.length === 0 ? (
+              {sourceLoading && sourceBounties.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 sm:py-20">
                   <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
                   <p className="text-muted-foreground">Loading bounties...</p>
@@ -896,7 +889,9 @@ export default function HomePage() {
   // useRoleGuard("CLIENT");
   return (
     <ProtectedRoute blockAdmin blockTeam>
-      <HomeContent />
+      <MobileNavShell>
+        <HomeContent />
+      </MobileNavShell>
     </ProtectedRoute>
   );
 }

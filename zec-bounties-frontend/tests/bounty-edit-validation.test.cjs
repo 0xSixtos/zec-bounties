@@ -48,7 +48,8 @@ function mount(kind) {
         if (!(i in state)) state[i] = initial;
         return [state[i], value => { state[i] = typeof value === "function" ? value(state[i]) : value; }];
       },
-      useEffect(fn) { if (!initialized) effect = fn; },
+      // The first effect copies the bounty into the form; later ones load activity.
+      useEffect(fn) { if (!initialized && !effect) effect = fn; },
     };
     if (id === "react/jsx-runtime") {
       const jsx = (type, props) => ({ type, props });
@@ -57,6 +58,8 @@ function mount(kind) {
     if (id === "@/lib/utils") return utils;
     if (id === "@/lib/displayName") return { displayName: user => user.name };
     if (id === "@/lib/bounty-context") return { useBounty: () => ({
+      currentUser: { id: "admin", role: "ADMIN" },
+      fetchBountyActivity: async () => [],
       nonAdminUsers: [{ id: "hunter", name: "Hunter", UA_address: "fixture", z_address: "fixture" }],
       updateBounty: async (_id, body) => {
         // Match the HTTP JSON boundary: omit undefined, serialize Date values.
@@ -65,6 +68,11 @@ function mount(kind) {
       },
     }) };
     if (id.startsWith("@/components/ui/") || id === "lucide-react" || id === "../ZecToUsd") return components;
+    if (id === "@/components/repo-filter" || id === "@/components/bounty-chat") return components;
+    if (id === "next/link") return { __esModule: true, default: "Link" };
+    if (id === "@/lib/repos") return loadTs("lib/repos.ts", dependency => {
+      throw new Error(`Unexpected repos dependency: ${dependency}`);
+    });
     throw new Error(`Unexpected modal dependency: ${id}`);
   });
   const Component = kind === "admin" ? exports.EditBountyModal : exports.TeamsEditBountyModal;
