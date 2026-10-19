@@ -98,14 +98,19 @@ export default function MyBountiesPage() {
 
   const userBounties = myBounties;
 
-  // Earnings are mainnet-only. Testnet completions must not inflate the
-  // dashboard or the monthly chart. The bounty list itself stays unfiltered
-  // so hunters can still see testnet work.
-  const mainnetDone = useMemo(
-    () =>
-      userBounties.filter((b) => b.status === "DONE" && b.chain === "MAIN"),
-    [userBounties],
-  );
+  // Earnings: mainnet, paid, and you were an assignee (solo or team).
+  // Creating a bounty does not count. Testnet does not count.
+  // The bounty list itself stays unfiltered so hunters still see everything.
+  const mainnetEarned = useMemo(() => {
+    const uid = currentUser?.id;
+    if (!uid) return [];
+    return userBounties.filter((b) => {
+      if (b.status !== "DONE" || b.chain !== "MAIN" || !b.isPaid) return false;
+      if (b.assignee === uid) return true;
+      if (b.assignees?.some((a) => a.userId === uid)) return true;
+      return false;
+    });
+  }, [userBounties, currentUser?.id]);
 
   const visibleBounties = useMemo(
     () =>
@@ -127,21 +132,21 @@ export default function MyBountiesPage() {
   const stats = useMemo(() => {
     const source = userBounties;
     return {
-      totalRewards: mainnetDone.reduce((sum, b) => sum + b.bountyAmount, 0),
+      totalRewards: mainnetEarned.reduce((sum, b) => sum + b.bountyAmount, 0),
       activeBounties: source.filter((b) => b.status === "IN_PROGRESS").length,
-      completed: mainnetDone.length,
+      completed: mainnetEarned.length,
       totalApplications: source.reduce(
         (sum, b) => sum + ((b as any).applications?.length || 0),
         0,
       ),
     };
-  }, [userBounties, mainnetDone]);
+  }, [userBounties, mainnetEarned]);
 
   const monthlyEarnings = useMemo(() => {
     const currentYear = new Date().getFullYear();
     const mapAmount: Record<number, number> = {};
     const mapBounties: Record<number, Bounty[]> = {};
-    mainnetDone.forEach((b) => {
+    mainnetEarned.forEach((b) => {
       const raw = (b as any).dateCreated ?? (b as any).createdAt ?? null;
       if (!raw) return;
       const d = new Date(raw);
@@ -155,14 +160,14 @@ export default function MyBountiesPage() {
       amount: mapAmount[i] || 0,
       bounties: mapBounties[i] || [],
     }));
-  }, [mainnetDone]);
+  }, [mainnetEarned]);
 
   const maxEarning = Math.max(...monthlyEarnings.map((m) => m.amount), 1);
   const yearTotal = monthlyEarnings.reduce((s, m) => s + m.amount, 0);
 
   const totalEarnedAllTime = useMemo(
-    () => mainnetDone.reduce((s, b) => s + b.bountyAmount, 0),
-    [mainnetDone],
+    () => mainnetEarned.reduce((s, b) => s + b.bountyAmount, 0),
+    [mainnetEarned],
   );
 
   const missingUA = !currentUser?.UA_address;
