@@ -6,6 +6,10 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useBounty } from "@/lib/bounty-context";
 import { backendUrl } from "@/lib/configENV";
+import {
+  clearGithubLoginState,
+  readGithubLoginState,
+} from "@/lib/githubLogin";
 
 export default function GithubCallback() {
   const { setCurrentUser } = useBounty();
@@ -14,9 +18,15 @@ export default function GithubCallback() {
 
   useEffect(() => {
     const token = searchParams.get("token");
+    const expectedState = readGithubLoginState();
 
     if (!token) {
       router.push("/login?error=missing_token");
+      return;
+    }
+
+    if (!expectedState || searchParams.get("state") !== expectedState) {
+      router.push("/login?error=invalid_state");
       return;
     }
 
@@ -31,10 +41,12 @@ export default function GithubCallback() {
         return data.user;
       })
       .then((user) => {
+        clearGithubLoginState();
         setCurrentUser(user);
         router.push(user.role === "ADMIN" ? "/admin" : "/home");
       })
       .catch((error) => {
+        clearGithubLoginState();
         localStorage.removeItem("authToken");
         toast.error("Sign-in failed", {
           description: error?.message ?? "Please try signing in again.",

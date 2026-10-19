@@ -16,6 +16,7 @@ import { Terminal } from "lucide-react";
 import { useBounty } from "@/lib/bounty-context";
 import { useRouter } from "next/navigation";
 import { backendUrl } from "@/lib/configENV";
+import { startGithubLogin } from "@/lib/githubLogin";
 
 export function LoginForm() {
   const [email, setEmail] = useState("");
@@ -116,6 +117,10 @@ export function LoginForm() {
             <a
               href={`${backendUrl}/auth/github`}
               className="github-login-btn block"
+              onClick={(e) => {
+                e.preventDefault();
+                startGithubLogin();
+              }}
             >
               <Button
                 type="button"
