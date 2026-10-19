@@ -10,7 +10,7 @@ export function setNymSending(open: boolean) {
 }
 
 export function NymSendingBanner() {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [slow, setSlow] = useState(false);
   const [showZec, setShowZec] = useState(false);
 
