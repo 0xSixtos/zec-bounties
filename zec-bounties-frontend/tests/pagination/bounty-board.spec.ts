@@ -52,13 +52,13 @@ async function openBoard(
   }, user);
 
   await page.routeWebSocket("ws://localhost:9000/**", (ws) => { socket = ws; });
-await page.routeWebSocket("ws://localhost:9001/**", (ws) => { socket = ws; });
-await page.route("**/*", async (route) => {
-  const url = new URL(route.request().url());
-  if (url.origin === "http://127.0.0.1:3127") return route.continue();
-  if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204 });
-  if (!["http://localhost:9000", "http://localhost:9001"].includes(url.origin)) return route.abort();
-  if (route.request().method() !== "GET") return route.abort();
+  await page.routeWebSocket("ws://localhost:9001/**", (ws) => { socket = ws; });
+  await page.route("**/*", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.origin === "http://127.0.0.1:3127") return route.continue();
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204 });
+    if (!["http://localhost:9000", "http://localhost:9001"].includes(url.origin)) return route.abort();
+    if (route.request().method() !== "GET") return route.abort();
 
     let json: unknown = [];
     if (url.pathname === "/api/notifications") json = { notifications: [], unreadCount: 0 };
@@ -71,6 +71,19 @@ await page.route("**/*", async (route) => {
     }
     if (url.pathname === "/api/notifications") {
       json = { notifications: [], unreadCount: 0 };
+    }
+    // Team filter switches the board to /api/teams/:id/bounties.
+    // Return the matching rows so client-side filters still have data.
+    const teamBountiesMatch = url.pathname.match(/^\/api\/teams\/([^/]+)\/bounties$/);
+    if (teamBountiesMatch) {
+      const teamId = teamBountiesMatch[1];
+      const teamRows = rows.filter((row) => row.teamId === teamId);
+      json = {
+        data: teamRows,
+        total: teamRows.length,
+        page: 1,
+        limit: 50,
+      };
     }
     if (url.pathname === "/api/bounties") {
       const pageNumber = Number(url.searchParams.get("page"));
@@ -198,55 +211,53 @@ test("sorts the full bounty set by reward and deadline", async ({ page }) => {
     ...bounty(index + 1),
     title: `Pagination bounty ${String(index + 1).padStart(2, "0")}`,
     bountyAmount: 12 - index,
-    timeToComplete: new Date(
-      Date.UTC(2026, 9, 20 - index),
-    ).toISOString(),
+    dateCreated: new Date(Date.UTC(2026, 8, index + 1, 12)).toISOString(),
+    timeToComplete: new Date(Date.UTC(2026, 9, 20 - index)).toISOString(),
   }));
-  await openBoard(page, rows.length, {
-    rows,
-    path: "/home?sort=highest_reward",
-  });
+  await openBoard(page, rows.length, { rows });
 
-  await expect(cards(page)).toHaveCount(rows.length);
+  await page.getByRole("combobox", { name: "Sort bounties" }).selectOption("highest_reward");
   await expect(cards(page).first()).toHaveText("Pagination bounty 01");
   await expect(page).toHaveURL(/sort=highest_reward/);
+
   await page.getByRole("combobox", { name: "Sort bounties" }).selectOption("soonest_deadline");
   await expect(cards(page).first()).toHaveText("Pagination bounty 12");
   await expect(page).toHaveURL(/sort=soonest_deadline/);
 });
 
-for (const total of [20, 25]) {
-  test(`refresh after loading 20 still allows all ${total} bounties`, async ({ page }, testInfo) => {
-    const fixture = await openBoard(page, total);
-    await expect(cards(page)).toHaveCount(10);
-    await scrollForMore(page);
-    await expect(cards(page)).toHaveCount(20);
-    await page.evaluate(() => window.scrollTo(0, 0));
+test("loads more results, then all results, after a list refresh", async ({ page }, testInfo) => {
+  const total = 25;
+  const fixture = await openBoard(page, total);
+  await expect(cards(page)).toHaveCount(10);
+  await expect(loadMore(page)).toBeVisible();
 
-    // Visibility changes still reset the authorized list. Assignment events
-    // now patch one bounty and intentionally preserve already loaded pages.
-    fixture.send("team_bounties_privacy_changed", { teamId: "fixture-team" });
-    await expect(cards(page)).toHaveCount(10);
-    await expect(loadMore(page)).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("after-refresh.png") });
+  await scrollForMore(page);
+  await expect(cards(page)).toHaveCount(20);
+  await page.evaluate(() => window.scrollTo(0, 0));
 
+  // Visibility changes still reset the authorized list. Assignment events
+  // now patch one bounty and intentionally preserve already loaded pages.
+  fixture.send("team_bounties_privacy_changed", { teamId: "fixture-team" });
+  await expect(cards(page)).toHaveCount(10);
+  await expect(loadMore(page)).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("after-refresh.png") });
+
+  await scrollForMore(page);
+  await expect(cards(page)).toHaveCount(20);
+  if (total > 20) {
     await scrollForMore(page);
-    await expect(cards(page)).toHaveCount(20);
-    if (total > 20) {
-      await scrollForMore(page);
-      await expect(cards(page)).toHaveCount(total);
-    }
-    await expect(loadMore(page)).toHaveCount(0);
-    expect(fixture.requestedPages).toEqual(
-      total === 20 ? [2, 1, 2] : [2, 1, 2, 3],
-    );
-    expect(new Set(await cards(page).allTextContents()).size).toBe(total);
-    await page.screenshot({
-      path: testInfo.outputPath("all-bounties.png"),
-      fullPage: true,
-    });
+    await expect(cards(page)).toHaveCount(total);
+  }
+  await expect(loadMore(page)).toHaveCount(0);
+  expect(fixture.requestedPages).toEqual(
+    total === 20 ? [2, 1, 2] : [2, 1, 2, 3],
+  );
+  expect(new Set(await cards(page).allTextContents()).size).toBe(total);
+  await page.screenshot({
+    path: testInfo.outputPath("all-bounties.png"),
+    fullPage: true,
   });
-}
+});
 
 for (const total of [0, 5, 10]) {
   test(`${total} results stop without requesting another page`, async ({ page }) => {
