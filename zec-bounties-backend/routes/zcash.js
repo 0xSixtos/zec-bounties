@@ -12,6 +12,9 @@ const {
   getDefaultZcashParams,
 } = require("../helpers/zcash/zcashHelper.js");
 const executeZingoCliInfo = require("../utils/zingo/zingoLibInfo");
+const {
+  validateWalletConnection,
+} = require("../helpers/zcash/walletConnection");
 
 const { sendToUser } = require("../middleware/websocket");
 
@@ -42,6 +45,14 @@ function findTeamWallet(ownerId, accountName) {
  */
 router.post("/import-wallet", authenticate, async (req, res) => {
   try {
+    // Only ADMIN and TEAM roles are allowed.
+    if (!["ADMIN", "TEAM"].includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: Only ADMIN and TEAM roles can import wallets.",
+      });
+    }
+
     const { accountName, seedPhrase, chain, serverUrl, birthdayHeight } =
       req.body;
     const userId = req.user.id;
@@ -62,6 +73,14 @@ router.post("/import-wallet", authenticate, async (req, res) => {
         success: false,
         message: "Invalid seed phrase. Must be 24 words.",
       });
+    }
+
+    const connectionError = validateWalletConnection({
+      chain: chain || "mainnet",
+      serverUrl: serverUrl || "https://zec.rocks:443",
+    });
+    if (connectionError) {
+      return res.status(400).json({ success: false, message: connectionError });
     }
 
     // Check if account already exists for this user
@@ -313,6 +332,14 @@ router.post("/params", authenticate, async (req, res) => {
       });
     }
 
+    const connectionError = validateWalletConnection({
+      chain: chain || "mainnet",
+      serverUrl: serverUrl || "https://zec.rocks:443",
+    });
+    if (connectionError) {
+      return res.status(400).json({ success: false, message: connectionError });
+    }
+
     // Check if account already exists for this user
     const existing = await findUserWallet(userId, accountName);
 
@@ -367,6 +394,11 @@ router.put("/params/:accountName", authenticate, async (req, res) => {
     const { accountName } = req.params;
     const { chain, serverUrl, accountName: newAccountName } = req.body;
     const userId = req.user.id;
+
+    const connectionError = validateWalletConnection({ chain, serverUrl });
+    if (connectionError) {
+      return res.status(400).json({ success: false, message: connectionError });
+    }
 
     // Check if parameters exist for this user
     const existing = await findUserWallet(userId, accountName);
@@ -462,6 +494,11 @@ router.patch("/params/:accountName", authenticate, async (req, res) => {
         success: false,
         message: "No valid fields to update",
       });
+    }
+
+    const connectionError = validateWalletConnection(updateData);
+    if (connectionError) {
+      return res.status(400).json({ success: false, message: connectionError });
     }
 
     // If changing account name, check if new name already exists for this user
@@ -643,6 +680,18 @@ router.post("/params/upsert", authenticate, async (req, res) => {
     // Prisma's upsert requires a unique key — since teamId:null breaks the
     // compound key in SQLite, we do a manual find-then-create-or-update.
     const existing = await findUserWallet(userId, accountName);
+
+    const connectionError = validateWalletConnection(
+      existing
+        ? { chain, serverUrl }
+        : {
+            chain: chain || "mainnet",
+            serverUrl: serverUrl || "https://zec.rocks:443",
+          },
+    );
+    if (connectionError) {
+      return res.status(400).json({ success: false, message: connectionError });
+    }
 
     let params;
     if (existing) {

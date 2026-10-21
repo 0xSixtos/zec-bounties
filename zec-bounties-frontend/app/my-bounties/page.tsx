@@ -1,7 +1,7 @@
 "use client";
-
 import {
   Plus,
+  Ban,
   TrendingUp,
   Clock,
   CheckCircle,
@@ -23,6 +23,7 @@ import { BountyDetailModal } from "@/components/bounty-detail-modal";
 import { useState, useMemo } from "react";
 import { Bounty } from "@/lib/types";
 import type { BountyStatus } from "@/lib/types";
+import { useTaskCreationBlocked } from "@/hooks/use-task-creation-blocked";
 
 const STATUS_COLUMNS: {
   status: BountyStatus;
@@ -80,20 +81,36 @@ const MONTH_LABELS = [
 type ViewMode = "bounties" | "earnings";
 
 export default function MyBountiesPage() {
+  const taskCreationBlocked = useTaskCreationBlocked();
+  const { bountyQuota } = useBounty();
   const { myBounties, myBountiesLoading, fetchMyBounties, currentUser } =
     useBounty();
   const [selectedBountyId, setSelectedBountyId] = useState<string | null>(null);
-  const selectedBounty = myBounties.find((b) => b.id === selectedBountyId) ?? null;
+  const selectedBounty =
+    myBounties.find((b) => b.id === selectedBountyId) ?? null;
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isNewBountyModalOpen, setIsNewBountyModalOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("bounties");
   const [statusFilter, setStatusFilter] = useState<BountyStatus | "ALL">("ALL");
   const [selectedMonthIdx, setSelectedMonthIdx] = useState<number | null>(null);
   const [hasSeenEarnings, setHasSeenEarnings] = useState(false);
-
   const router = useRouter();
 
   const userBounties = myBounties;
+
+  // Earnings: mainnet, paid, and you were an assignee (solo or team).
+  // Creating a bounty does not count. Testnet does not count.
+  // The bounty list itself stays unfiltered so hunters still see everything.
+  const mainnetEarned = useMemo(() => {
+    const uid = currentUser?.id;
+    if (!uid) return [];
+    return userBounties.filter((b) => {
+      if (b.status !== "DONE" || b.chain !== "MAIN" || !b.isPaid) return false;
+      if (b.assignee === uid) return true;
+      if (b.assignees?.some((a) => a.userId === uid)) return true;
+      return false;
+    });
+  }, [userBounties, currentUser?.id]);
 
   const visibleBounties = useMemo(
     () =>
@@ -114,50 +131,44 @@ export default function MyBountiesPage() {
 
   const stats = useMemo(() => {
     const source = userBounties;
-    const done = source.filter((b) => b.status === "DONE");
     return {
-      totalRewards: done.reduce((sum, b) => sum + b.bountyAmount, 0),
+      totalRewards: mainnetEarned.reduce((sum, b) => sum + b.bountyAmount, 0),
       activeBounties: source.filter((b) => b.status === "IN_PROGRESS").length,
-      completed: done.length,
+      completed: mainnetEarned.length,
       totalApplications: source.reduce(
         (sum, b) => sum + ((b as any).applications?.length || 0),
         0,
       ),
     };
-  }, [userBounties]);
+  }, [userBounties, mainnetEarned]);
 
   const monthlyEarnings = useMemo(() => {
     const currentYear = new Date().getFullYear();
     const mapAmount: Record<number, number> = {};
     const mapBounties: Record<number, Bounty[]> = {};
-    const source = userBounties;
-    source
-      .filter((b) => b.status === "DONE")
-      .forEach((b) => {
-        const raw = (b as any).dateCreated ?? (b as any).createdAt ?? null;
-        if (!raw) return;
-        const d = new Date(raw);
-        if (isNaN(d.getTime()) || d.getFullYear() !== currentYear) return;
-        const m = d.getMonth();
-        mapAmount[m] = (mapAmount[m] || 0) + b.bountyAmount;
-        mapBounties[m] = [...(mapBounties[m] || []), b];
-      });
+    mainnetEarned.forEach((b) => {
+      const raw = (b as any).dateCreated ?? (b as any).createdAt ?? null;
+      if (!raw) return;
+      const d = new Date(raw);
+      if (isNaN(d.getTime()) || d.getFullYear() !== currentYear) return;
+      const m = d.getMonth();
+      mapAmount[m] = (mapAmount[m] || 0) + b.bountyAmount;
+      mapBounties[m] = [...(mapBounties[m] || []), b];
+    });
     return MONTH_LABELS.map((label, i) => ({
       label,
       amount: mapAmount[i] || 0,
       bounties: mapBounties[i] || [],
     }));
-  }, [userBounties]);
+  }, [mainnetEarned]);
 
   const maxEarning = Math.max(...monthlyEarnings.map((m) => m.amount), 1);
   const yearTotal = monthlyEarnings.reduce((s, m) => s + m.amount, 0);
 
-  const totalEarnedAllTime = useMemo(() => {
-    const source = userBounties;
-    return source
-      .filter((b) => b.status === "DONE")
-      .reduce((s, b) => s + b.bountyAmount, 0);
-  }, [userBounties]);
+  const totalEarnedAllTime = useMemo(
+    () => mainnetEarned.reduce((s, b) => s + b.bountyAmount, 0),
+    [mainnetEarned],
+  );
 
   const missingUA = !currentUser?.UA_address;
 
@@ -167,6 +178,12 @@ export default function MyBountiesPage() {
   };
 
   const handleNewBounty = () => {
+    if (taskCreationBlocked) {
+      toast.error("Task creation disabled", {
+        description: "An admin has blocked your account from creating tasks.",
+      });
+      return;
+    }
     if (!currentUser?.UA_address) {
       toast.warning("Unified Address required", {
         description: "Add a UA to your profile before creating a bounty.",
@@ -185,7 +202,6 @@ export default function MyBountiesPage() {
     <ProtectedRoute blockAdmin>
       <main className="min-h-screen bg-background">
         <Navbar />
-
         <BountyDetailModal
           bounty={selectedBounty}
           open={isDetailModalOpen}
@@ -194,7 +210,6 @@ export default function MyBountiesPage() {
             if (!open) fetchMyBounties();
           }}
         />
-
         <NewBountyModal
           open={isNewBountyModalOpen}
           onOpenChange={setIsNewBountyModalOpen}
@@ -204,7 +219,6 @@ export default function MyBountiesPage() {
           }}
           onCancel={() => setIsNewBountyModalOpen(false)}
         />
-
         <div className="max-w-7xl mx-auto px-3 sam:px-4 imd:px-6 lg:px-8 py-5 imd:py-8">
           {/* ── Header ── */}
           <div className="flex flex-col imd:flex-row imd:items-end justify-between gap-3 mb-5 imd:mb-8">
@@ -217,13 +231,28 @@ export default function MyBountiesPage() {
               </p>
             </div>
             <Button
-              className="hidden imd:flex gap-2 rounded-full shadow-lg shadow-primary/20 shrink-0"
+              title={
+                taskCreationBlocked
+                  ? bountyQuota?.postEligibility?.mode === "closed"
+                    ? "Bounty suggestions are currently closed"
+                    : bountyQuota?.postEligibility?.allowed === false
+                      ? `Complete ${bountyQuota.postEligibility.required} bounties to post your own`
+                      : "An admin has disabled task creation for your account"
+                  : undefined
+              }
+              className={`hidden imd:flex gap-2 rounded-full shadow-lg shadow-primary/20 shrink-0 ${
+                taskCreationBlocked ? "opacity-50" : ""
+              }`}
               onClick={handleNewBounty}
             >
-              <Plus className="w-4 h-4" /> New Bounty
+              {taskCreationBlocked ? (
+                <Ban className="w-4 h-4" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}{" "}
+              New Bounty
             </Button>
           </div>
-
           {/* ── Stats — 2-col on phones, 4-col on imd+ ── */}
           <div className="grid grid-cols-2 imd:grid-cols-4 gap-2 sam:gap-3 imd:gap-4 mb-5 imd:mb-8">
             {[
@@ -260,11 +289,9 @@ export default function MyBountiesPage() {
               </Card>
             ))}
           </div>
-
           {/* ── Toolbar ── */}
           <div className="flex flex-col gap-2 sam:gap-3 pb-3 sam:pb-4 border-b mb-4 sam:mb-6">
             {/* Title row + earnings toggle */}
-
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-base sam:text-lg imd:text-xl font-bold">
                 All Bounties
@@ -292,7 +319,6 @@ export default function MyBountiesPage() {
                 </Button>
               </div>
             </div>
-
             {/* Status pills — horizontal scroll on phones, wraps on imd+ */}
             {viewMode === "bounties" && (
               <div className="overflow-x-auto -mx-3 px-3 sam:-mx-4 sam:px-4 imd:mx-0 imd:px-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
@@ -310,7 +336,6 @@ export default function MyBountiesPage() {
                       {userBounties.length}
                     </span>
                   </button>
-
                   {STATUS_COLUMNS.map((col) => {
                     const count = userBounties.filter(
                       (b) => b.status === col.status,
@@ -340,7 +365,6 @@ export default function MyBountiesPage() {
               </div>
             )}
           </div>
-
           {/* ── Bounties view ── */}
           {viewMode === "bounties" && (
             <>
@@ -392,7 +416,6 @@ export default function MyBountiesPage() {
               )}
             </>
           )}
-
           {/* ── Monthly Earnings ── */}
           {viewMode === "earnings" && (
             <div className="space-y-4 imd:space-y-6">
@@ -403,7 +426,8 @@ export default function MyBountiesPage() {
                     Earnings Overview
                   </h2>
                   <p className="text-xs sam:text-sm text-muted-foreground mt-0.5">
-                    {new Date().getFullYear()} — tap a month for details
+                    {new Date().getFullYear()} — mainnet only — tap a month for
+                    details
                   </p>
                 </div>
                 {!myBountiesLoading && yearTotal > 0 && (
@@ -415,7 +439,6 @@ export default function MyBountiesPage() {
                   </div>
                 )}
               </div>
-
               {myBountiesLoading ? (
                 <div className="flex items-center justify-center py-20 gap-3 text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin" />
@@ -425,7 +448,7 @@ export default function MyBountiesPage() {
                 <div className="flex flex-col items-center justify-center py-20 border rounded-xl bg-muted/10 gap-2">
                   <CheckCircle className="h-8 w-8 text-muted-foreground/30" />
                   <p className="text-sm text-muted-foreground">
-                    No completed bounties this year yet.
+                    No completed mainnet bounties this year yet.
                   </p>
                 </div>
               ) : (
@@ -483,7 +506,6 @@ export default function MyBountiesPage() {
                             );
                           })}
                         </div>
-
                         {/* Month labels */}
                         <div className="flex gap-0.5 sam:gap-1 imd:gap-1.5 mt-1.5">
                           {monthlyEarnings.map((m, i) => (
@@ -501,7 +523,6 @@ export default function MyBountiesPage() {
                         </div>
                       </CardContent>
                     </Card>
-
                     {/* Month summary list */}
                     <div className="space-y-0.5">
                       {monthlyEarnings
@@ -550,7 +571,6 @@ export default function MyBountiesPage() {
                         })}
                     </div>
                   </div>
-
                   {/* Right: drill-down panel */}
                   <div className="lg:col-span-2">
                     {selectedMonthIdx === null ? (
@@ -591,7 +611,6 @@ export default function MyBountiesPage() {
                             </Badge>
                           </div>
                         </div>
-
                         <div className="divide-y divide-border max-h-72 imd:max-h-96 overflow-y-auto">
                           {monthlyEarnings[selectedMonthIdx].bounties.map(
                             (b) => (
@@ -622,7 +641,6 @@ export default function MyBountiesPage() {
                             ),
                           )}
                         </div>
-
                         {monthlyEarnings[selectedMonthIdx].bounties.length >
                           1 && (
                           <div className="flex items-center justify-between px-3 sam:px-4 py-2.5 border-t border-border bg-muted/20">

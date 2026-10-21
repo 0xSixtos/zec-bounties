@@ -11,7 +11,6 @@ import {
   List,
   Grid3X3,
   Plus,
-  Filter,
   ArrowRight,
   Loader2,
   ChevronsDown,
@@ -22,21 +21,30 @@ import { Badge } from "@/components/ui/badge";
 import { NewBountyModal } from "@/components/new-bounty-modal";
 import { BountyDetailModal } from "@/components/bounty-detail-modal";
 import { RepoFilter } from "@/components/repo-filter";
-import { bountyRepo, type RepoId } from "@/lib/repos";
+import {
+  FilterPanel,
+  FilterSection,
+  FilterChip,
+  FilterSelect,
+  filterFieldClass,
+} from "@/components/filter-panel";
+import { bountyRepo } from "@/lib/repos";
 import { Bounty } from "@/lib/types";
 import { useBounty } from "@/lib/bounty-context";
 import type { BountyStatus } from "@/lib/types";
+import {
+  DEFAULT_BOUNTY_BOARD_FILTERS,
+  filterAndSortBounties,
+  readBountyBoardFilters,
+  writeBountyBoardFilters,
+  type BountyBoardFilters,
+} from "@/lib/bounty-filters";
 import { formatStatus } from "@/lib/utils";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { FavoriteTeamsSidebar } from "@/components/favorite-teams-sidebar";
 import { HeroCarousel } from "@/components/hero-carousel";
-import { BottomTabBar } from "@/components/layout/bottom-tab-bar";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { MobileNavShell } from "@/components/layout/mobile-nav-shell";
+import { useTaskCreationBlocked } from "@/hooks/use-task-creation-blocked";
 // import { useRoleGuard } from "@/hooks/use-role-guard";
 
 const KANBAN_COLUMNS: {
@@ -98,7 +106,21 @@ const STATUS_ORDER: BountyStatus[] = [
   "CANCELLED",
 ];
 
+// YYYY-MM-DD in the user's local timezone, `days` from today
+const dateInDays = (days: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toLocaleDateString("en-CA");
+};
+
+const DEADLINE_PRESETS = [
+  { label: "This week", days: 7 },
+  { label: "This month", days: 30 },
+];
+
 function HomeContent() {
+  const taskCreationBlocked = useTaskCreationBlocked();
+  const { bountyQuota } = useBounty();
   const {
     bounties,
     currentUser,
@@ -106,47 +128,101 @@ function HomeContent() {
     communities,
     bountiesLoading,
     loadMoreBounties,
+    loadAllBounties,
     hasMoreBounties,
     fetchBountyById,
+    teamBounties,
+    teamBountiesLoading,
+    teamBountiesHasMore,
+    fetchTeamBounties,
+    loadMoreTeamBounties,
   } = useBounty();
 
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const [activeCategory, setActiveCategory] = useState("All");
-  const [activeRepo, setActiveRepo] = useState<RepoId | "all" | "untagged">("all");
+  const [filters, setFilters] = useState<BountyBoardFilters>(() =>
+    readBountyBoardFilters(searchParams),
+  );
+  const [filterLoadError, setFilterLoadError] = useState(false);
+  const [filterLoadRetry, setFilterLoadRetry] = useState(0);
+  const filterLoadStarted = useRef(false);
   const [viewMode, setViewMode] = useState<"grid" | "list" | "defrag">("grid");
-  const [activeTeamId, setActiveTeamId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [isNewBountyModalOpen, setIsNewBountyModalOpen] = useState(false);
   const [selectedBounty, setSelectedBounty] = useState<Bounty | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const [isTeamsSheetOpen, setIsTeamsSheetOpen] = useState(false);
+
+  const {
+    category: activeCategory,
+    repo: activeRepo,
+    teamId: activeTeamId,
+    query: searchQuery,
+  } = filters;
+
+  const updateFilter = <K extends keyof BountyBoardFilters>(
+    key: K,
+    value: BountyBoardFilters[K],
+  ) => {
+    const nextFilters = { ...filters, [key]: value };
+    setFilters(nextFilters);
+    const params = writeBountyBoardFilters(
+      new URLSearchParams(window.location.search),
+      nextFilters,
+    );
+    const query = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${pathname}${query ? `?${query}` : ""}`,
+    );
+  };
+
+  const searchParamString = searchParams.toString();
+  useEffect(() => {
+    setFilters(readBountyBoardFilters(new URLSearchParams(searchParamString)));
+  }, [searchParamString]);
 
   // currentUser is guaranteed non-null here — ProtectedRoute handles the gate
   const displayCategories = ["All", ...categories.map((c) => c.name)];
+  const filterTeams = useMemo(() => {
+    const byId = new Map(communities.map((team) => [team.id, team]));
+    for (const bounty of bounties) {
+      if (bounty.teamId && bounty.team && !byId.has(bounty.teamId)) {
+        byId.set(bounty.teamId, {
+          id: bounty.teamId,
+          name: bounty.team.name,
+          description: null,
+          memberCount: 0,
+        });
+      }
+    }
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [communities, bounties]);
+
+  useEffect(() => {
+    if (activeTeamId) fetchTeamBounties(activeTeamId);
+  }, [activeTeamId]);
+
+  const sourceBounties = activeTeamId
+    ? (teamBounties[activeTeamId] ?? [])
+    : bounties;
+  const sourceLoading = activeTeamId
+    ? !!teamBountiesLoading[activeTeamId]
+    : bountiesLoading;
+  const sourceHasMore = activeTeamId
+    ? !!teamBountiesHasMore[activeTeamId]
+    : hasMoreBounties;
 
   const categoryFilteredBounties = useMemo(() => {
-    let filtered = bounties;
-    if (activeTeamId) {
-      filtered = filtered.filter((b) => b.teamId === activeTeamId);
-    }
-    if (activeCategory !== "All")
-      filtered = filtered.filter((b) => b.categoryId === activeCategory);
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (b) =>
-          b.title.toLowerCase().includes(q) ||
-          b.description.toLowerCase().includes(q) ||
-          b.createdByUser?.name?.toLowerCase().includes(q),
-      );
-    }
-    return filtered;
-  }, [bounties, searchQuery, activeCategory, activeTeamId]);
+    return filterAndSortBounties(sourceBounties, {
+      ...filters,
+      repo: "all",
+      sort: "newest",
+    });
+  }, [sourceBounties, filters]);
 
   const repoCounts = useMemo(() => {
     const counts = {
@@ -164,20 +240,10 @@ function HomeContent() {
     return counts;
   }, [categoryFilteredBounties]);
 
-  const filteredBounties = useMemo(() => {
-    const filtered =
-      activeRepo === "all"
-        ? categoryFilteredBounties
-        : categoryFilteredBounties.filter((bounty) =>
-            activeRepo === "untagged"
-              ? bountyRepo(bounty) == null
-              : bountyRepo(bounty) === activeRepo,
-          );
-    return filtered.sort(
-      (a, b) =>
-        new Date(b.dateCreated).getTime() - new Date(a.dateCreated).getTime(),
-    );
-  }, [categoryFilteredBounties, activeRepo]);
+  const filteredBounties = useMemo(
+    () => filterAndSortBounties(sourceBounties, filters),
+    [sourceBounties, filters],
+  );
 
   const kanbanGroups = useMemo(
     () =>
@@ -200,33 +266,38 @@ function HomeContent() {
   }, [filteredBounties]);
 
   const missingUA = !currentUser?.UA_address;
-  const taskCreationBlocked = currentUser?.canCreateTasks === false;
 
   // Open a bounty and reflect it in the URL
   const openBounty = (bounty: Bounty) => {
     setSelectedBounty(bounty);
     setIsDetailModalOpen(true);
-    router.push(`${pathname}?bounty=${bounty.id}`, { scroll: false });
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("bounty", bounty.id);
+    router.push(`${pathname}?${params.toString()}`, { scroll: false });
   };
 
   const closeBounty = () => {
     setIsDetailModalOpen(false);
-    router.push(pathname, { scroll: false }); // strips the query param
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("bounty");
+    const query = params.toString();
+    router.push(`${pathname}${query ? `?${query}` : ""}`, { scroll: false });
   };
 
   const getCategoryCount = (name: string) =>
     name === "All"
-      ? bounties.length
-      : bounties.filter((b) => b.categoryId === name).length;
+      ? sourceBounties.length
+      : sourceBounties.filter((b) => b.categoryId === name).length;
 
   const handleLoadMore = useCallback(async () => {
     setIsLoadingMore(true);
     try {
-      await loadMoreBounties();
+      if (activeTeamId) await loadMoreTeamBounties(activeTeamId);
+      else await loadMoreBounties();
     } finally {
       setIsLoadingMore(false);
     }
-  }, [loadMoreBounties]);
+  }, [loadMoreBounties, loadMoreTeamBounties, activeTeamId]);
 
   const handleNewBounty = () => {
     if (taskCreationBlocked) {
@@ -249,11 +320,67 @@ function HomeContent() {
     setIsNewBountyModalOpen(true);
   };
 
-  const canLoadMore =
-    hasMoreBounties &&
-    !searchQuery &&
-    activeCategory === "All" &&
-    !activeTeamId;
+  const requiresCompleteResults =
+    filters.query.trim() !== "" ||
+    filters.category !== "All" ||
+    filters.repo !== "all" ||
+    filters.minReward != null ||
+    filters.maxReward != null ||
+    filters.deadline !== "" ||
+    filters.status !== "" ||
+    filters.sort !== "newest";
+
+  const activeFilterCount = [
+    filters.category !== "All",
+    filters.repo !== "all",
+    filters.minReward != null,
+    filters.maxReward != null,
+    filters.deadline !== "",
+    filters.status !== "",
+    filters.teamId !== "",
+    filters.sort !== "newest",
+  ].filter(Boolean).length;
+
+  const clearFilters = () => {
+    const nextFilters = { ...DEFAULT_BOUNTY_BOARD_FILTERS };
+    setFilters(nextFilters);
+    const params = writeBountyBoardFilters(
+      new URLSearchParams(window.location.search),
+      nextFilters,
+    );
+    const query = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${pathname}${query ? `?${query}` : ""}`,
+    );
+  };
+
+  useEffect(() => {
+    if (activeTeamId) return;
+    if (!requiresCompleteResults) {
+      filterLoadStarted.current = false;
+      setFilterLoadError(false);
+      return;
+    }
+    if (!hasMoreBounties || bountiesLoading || filterLoadStarted.current)
+      return;
+
+    filterLoadStarted.current = true;
+    setFilterLoadError(false);
+    void loadAllBounties().then((loaded) => {
+      if (!loaded) setFilterLoadError(true);
+    });
+  }, [
+    requiresCompleteResults,
+    hasMoreBounties,
+    bountiesLoading,
+    loadAllBounties,
+    filterLoadRetry,
+    activeTeamId,
+  ]);
+
+  const canLoadMore = sourceHasMore && !requiresCompleteResults;
 
   useEffect(() => {
     if (!canLoadMore) return;
@@ -262,7 +389,7 @@ function HomeContent() {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && !isLoadingMore && !bountiesLoading) {
+        if (entries[0].isIntersecting && !isLoadingMore && !sourceLoading) {
           handleLoadMore();
         }
       },
@@ -271,7 +398,7 @@ function HomeContent() {
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [canLoadMore, isLoadingMore, bountiesLoading, handleLoadMore]);
+  }, [canLoadMore, isLoadingMore, sourceLoading, handleLoadMore]);
 
   // On load / when the URL param changes, open the matching bounty
   useEffect(() => {
@@ -297,34 +424,11 @@ function HomeContent() {
   }, [searchParams, bounties, fetchBountyById]);
 
   return (
-    <main className="min-h-screen bg-background text-foregroun pb-20 md:pb-0">
-      <Sheet open={isTeamsSheetOpen} onOpenChange={setIsTeamsSheetOpen}>
-        <SheetContent
-          side="bottom"
-          className="max-h-[70vh] overflow-y-auto p-4 py-6"
-        >
-          <SheetHeader>
-            <SheetTitle>Favorite Teams</SheetTitle>
-          </SheetHeader>
-          <div className="mt-4">
-            <FavoriteTeamsSidebar
-              activeTeamId={activeTeamId}
-              onSelectTeam={(id) => {
-                setActiveTeamId(id);
-                setIsTeamsSheetOpen(false); // close after picking, feels more native
-              }}
-            />
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      <BottomTabBar
-        onNewBounty={handleNewBounty}
-        newBountyBlocked={taskCreationBlocked}
-        onOpenTeams={() => setIsTeamsSheetOpen(true)}
-        teamsActive={!!activeTeamId}
+    <main className="min-h-screen bg-background text-foreground">
+      <Navbar
+        searchQuery={searchQuery}
+        onSearchChange={(value) => updateFilter("query", value)}
       />
-      <Navbar searchQuery={searchQuery} onSearchChange={setSearchQuery} />
 
       <div className="xl:container xl:mx-auto px-3 imd:px-4 py-6 imd:py-8">
         <HeroCarousel onNewBounty={handleNewBounty} />
@@ -361,7 +465,11 @@ function HomeContent() {
             <Button
               title={
                 taskCreationBlocked
-                  ? "An admin has disabled task creation for your account"
+                  ? bountyQuota?.postEligibility?.mode === "closed"
+                    ? "Bounty suggestions are currently closed"
+                    : bountyQuota?.postEligibility?.allowed === false
+                      ? `Complete ${bountyQuota.postEligibility.required} bounties to post your own`
+                      : "An admin has disabled task creation for your account"
                   : undefined
               }
               className={`w-full sm:w-auto rounded-full shadow-lg shadow-primary/20 ${
@@ -405,42 +513,11 @@ function HomeContent() {
           <aside className="hidden imd:block imd:w-auto shrink-0">
             <FavoriteTeamsSidebar
               activeTeamId={activeTeamId}
-              onSelectTeam={setActiveTeamId}
+              onSelectTeam={(id) => updateFilter("teamId", id ?? "")}
             />
           </aside>
 
           <div className="space-y-6 min-w-0 flex-1">
-            <div
-              className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none"
-              style={{
-                scrollbarWidth: "none",
-                msOverflowStyle: "none",
-              }}
-            >
-              {displayCategories.map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setActiveCategory(cat)}
-                  className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 h-9 text-sm transition ${
-                    activeCategory === cat
-                      ? "border-primary bg-primary/10 font-semibold text-primary"
-                      : "border-border text-muted-foreground hover:text-primary hover:border-primary/40"
-                  }`}
-                >
-                  {cat}
-                  <Badge
-                    variant="secondary"
-                    className="text-[10px] h-4 px-1.5 leading-none"
-                  >
-                    {getCategoryCount(cat)}
-                  </Badge>
-                </button>
-              ))}
-            </div>
-
-            <RepoFilter value={activeRepo} onChange={setActiveRepo} counts={repoCounts} />
-
             <div className="space-y-6 min-w-0 flex-1">
               <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 pb-3 sm:pb-4 border-b">
                 <h2 className="truncate text-base sm:text-xl font-bold">
@@ -452,6 +529,192 @@ function HomeContent() {
                 </h2>
 
                 <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+                  <FilterPanel
+                    activeCount={activeFilterCount}
+                    onClear={clearFilters}
+                    applyLabel={`Show ${filteredBounties.length} bounties`}
+                    loading={
+                      bountiesLoading &&
+                      hasMoreBounties &&
+                      requiresCompleteResults
+                    }
+                  >
+                    <FilterSection label="Category">
+                      <div className="flex flex-wrap gap-2">
+                        {displayCategories.map((cat) => (
+                          <FilterChip
+                            key={cat}
+                            active={activeCategory === cat}
+                            onClick={() => updateFilter("category", cat)}
+                            count={getCategoryCount(cat)}
+                          >
+                            {cat}
+                          </FilterChip>
+                        ))}
+                      </div>
+                    </FilterSection>
+
+                    <FilterSection label="Repository">
+                      <RepoFilter
+                        value={activeRepo}
+                        onChange={(repo) => updateFilter("repo", repo)}
+                        counts={repoCounts}
+                      />
+                    </FilterSection>
+
+                    <div className="grid grid-cols-1 gap-3 sam:grid-cols-2">
+                      <label className="flex min-w-0 flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+                        Min reward
+                        <div className="relative">
+                          <input
+                            aria-label="Minimum reward"
+                            type="number"
+                            inputMode="decimal"
+                            min="0"
+                            step="any"
+                            placeholder="0"
+                            value={filters.minReward ?? ""}
+                            onChange={(e) =>
+                              updateFilter(
+                                "minReward",
+                                e.target.value === ""
+                                  ? null
+                                  : Number(e.target.value),
+                              )
+                            }
+                            className={`${filterFieldClass} pr-12 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                          />
+                          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                            ZEC
+                          </span>
+                        </div>
+                      </label>
+                      <label className="flex min-w-0 flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+                        Max reward
+                        <div className="relative">
+                          <input
+                            aria-label="Maximum reward"
+                            type="number"
+                            inputMode="decimal"
+                            min="0"
+                            step="any"
+                            placeholder="Any"
+                            value={filters.maxReward ?? ""}
+                            onChange={(e) =>
+                              updateFilter(
+                                "maxReward",
+                                e.target.value === ""
+                                  ? null
+                                  : Number(e.target.value),
+                              )
+                            }
+                            className={`${filterFieldClass} pr-12 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                          />
+                          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                            ZEC
+                          </span>
+                        </div>
+                      </label>
+
+                      <div className="flex min-w-0 flex-col gap-1.5 sam:col-span-2">
+                        <label
+                          htmlFor="filter-deadline"
+                          className="text-xs font-medium text-muted-foreground"
+                        >
+                          Deadline (on or before)
+                        </label>
+                        <input
+                          id="filter-deadline"
+                          type="date"
+                          value={filters.deadline}
+                          onChange={(e) =>
+                            updateFilter("deadline", e.target.value)
+                          }
+                          className={`${filterFieldClass} dark:[color-scheme:dark]`}
+                        />
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {DEADLINE_PRESETS.map((preset) => {
+                            const presetValue = dateInDays(preset.days);
+                            const active = filters.deadline === presetValue;
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() =>
+                                  updateFilter(
+                                    "deadline",
+                                    active ? "" : presetValue,
+                                  )
+                                }
+                                className={`h-7 rounded-full border px-3 text-xs transition ${
+                                  active
+                                    ? "border-primary bg-primary/10 font-semibold text-primary"
+                                    : "border-border text-muted-foreground hover:border-primary/40 hover:text-primary"
+                                }`}
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
+                          {filters.deadline !== "" && (
+                            <button
+                              type="button"
+                              onClick={() => updateFilter("deadline", "")}
+                              className="h-7 rounded-full px-2 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                            >
+                              Clear date
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <FilterSelect
+                        label="Status"
+                        value={filters.status}
+                        options={[
+                          { value: "", label: "All statuses" },
+                          { value: "open", label: "Open" },
+                          { value: "assigned", label: "Assigned" },
+                          { value: "in_review", label: "In review" },
+                        ]}
+                        onChange={(v) =>
+                          updateFilter(
+                            "status",
+                            v as BountyBoardFilters["status"],
+                          )
+                        }
+                      />
+                      <FilterSelect
+                        label="Sort by"
+                        value={filters.sort}
+                        options={[
+                          { value: "newest", label: "Newest" },
+                          { value: "highest_reward", label: "Highest reward" },
+                          {
+                            value: "soonest_deadline",
+                            label: "Soonest deadline",
+                          },
+                        ]}
+                        onChange={(v) =>
+                          updateFilter("sort", v as BountyBoardFilters["sort"])
+                        }
+                      />
+                      <FilterSelect
+                        className="sam:col-span-2"
+                        label="Team"
+                        value={filters.teamId}
+                        options={[
+                          { value: "", label: "All teams" },
+                          ...filterTeams.map((team) => ({
+                            value: team.id,
+                            label: team.name,
+                          })),
+                        ]}
+                        onChange={(v) => updateFilter("teamId", v)}
+                      />
+                    </div>
+                  </FilterPanel>
+                  <div className="mx-1 hidden h-5 w-px bg-border sam:block" />
                   <Button
                     variant={viewMode === "grid" ? "secondary" : "ghost"}
                     size="icon"
@@ -502,7 +765,33 @@ function HomeContent() {
                 </div>
               </div>
 
-              {bountiesLoading && bounties.length === 0 ? (
+              {requiresCompleteResults && (
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span aria-live="polite">
+                    {bountiesLoading && hasMoreBounties
+                      ? "Loading all bounties for complete filter results…"
+                      : filterLoadError
+                        ? "Could not load all bounties. Showing the results currently available."
+                        : `${filteredBounties.length} matching bounties`}
+                  </span>
+                  {filterLoadError && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        filterLoadStarted.current = false;
+                        setFilterLoadRetry((attempt) => attempt + 1);
+                        setFilterLoadError(false);
+                      }}
+                    >
+                      Retry
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {sourceLoading && sourceBounties.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 sm:py-20">
                   <Loader2 className="h-8 w-8 animate-spin text-primary mb-4" />
                   <p className="text-muted-foreground">Loading bounties...</p>
@@ -666,7 +955,9 @@ export default function HomePage() {
   // useRoleGuard("CLIENT");
   return (
     <ProtectedRoute blockAdmin blockTeam>
-      <HomeContent />
+      <MobileNavShell>
+        <HomeContent />
+      </MobileNavShell>
     </ProtectedRoute>
   );
 }

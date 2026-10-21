@@ -28,7 +28,7 @@ function createPaymentCacheHarness({ sendError = null } = {}) {
   const redisClient = {
     get: async key => values.get(key) ?? null,
     setEx: async (key, _ttl, value) => values.set(key, value),
-    del: async (...keys) => keys.forEach(key => values.delete(key)),
+    del: async keys => (Array.isArray(keys) ? keys : [keys]).forEach(key => values.delete(key)),
     incr: async key => {
       const next = Number(values.get(key) ?? 0) + 1;
       values.set(key, String(next));
@@ -108,6 +108,12 @@ function createPaymentCacheHarness({ sendError = null } = {}) {
     "../utils/userIdentity": require("../../utils/userIdentity"),
     "../helpers/email": {}, "../helpers/validateBounty": {},
 "../utils/bountySuggestionReview": require("../../utils/bountySuggestionReview"),
+    "../utils/suggestionSettings": {
+      getSuggestionSettings: async () => ({ mode: "open", threshold: 0 }),
+      setSuggestionSettings: async () => ({ mode: "open", threshold: 0 }),
+      invalidateSuggestionSettingsCache: () => {},
+      VALID_MODES: new Set(["closed", "open", "threshold"]),
+    },
     "../helpers/clearBountyChat": { clearBountyChat: forbidden, isTransitionToDone: () => false },
     "../utils/sendMail": forbidden, "../utils/notifyUser": forbidden,
     "../utils/discord/discordNotify": {}, "../utils/discord/discordAssignWebhook": {},

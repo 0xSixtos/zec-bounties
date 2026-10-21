@@ -351,7 +351,9 @@ router.get(
           monthlyData.set(monthKey, new Set());
         }
 
-        monthlyData.get(monthKey).add(bounty.assignee);
+        if (bounty.assignee != null) {
+          monthlyData.get(monthKey).add(bounty.assignee);
+        }
       });
 
       const result = [];
@@ -377,6 +379,24 @@ router.get(
     }
   },
 );
+
+router.get("/zec-usd-monthly", authenticate, isAdmin, async (req, res) => {
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT
+        to_char(month, 'YYYY-MM') AS month,
+        avg_usd::float8           AS "avgUsd",
+        close_usd::float8         AS "closeUsd",
+        provisional
+      FROM zec_usd_monthly
+      ORDER BY month
+    `;
+    res.json(rows);
+  } catch (error) {
+    console.error("Failed to load zec_usd_monthly:", error);
+    res.status(500).json({ error: "Failed to load USD prices" });
+  }
+});
 
 // GET /api/kpis/average-earnings-over-time (aggregates only — any logged-in user)
 router.get(
@@ -605,7 +625,7 @@ router.get(
         select: { id: true, badges: true },
       });
       const userBadges = new Map(
-        users.map((u) => [u.id, Array.isArray(u.badges) ? u.badges : []])
+        users.map((u) => [u.id, Array.isArray(u.badges) ? u.badges : []]),
       );
 
       const completedBounties = await prisma.bounty.findMany({
@@ -622,8 +642,8 @@ router.get(
       const months = [
         ...new Set(
           completedBounties.map((b) =>
-            new Date(b.completedAt).toISOString().slice(0, 7)
-          )
+            new Date(b.completedAt).toISOString().slice(0, 7),
+          ),
         ),
       ].sort();
 
@@ -641,7 +661,7 @@ router.get(
           const b = completedBounties[idx];
           userCumulative.set(
             b.assignee,
-            (userCumulative.get(b.assignee) || 0) + 1
+            (userCumulative.get(b.assignee) || 0) + 1,
           );
           idx++;
         }
@@ -655,7 +675,7 @@ router.get(
           "50-tasks": 0,
         };
 
-                // Users with completions by this month
+        // Users with completions by this month
         const seen = new Set();
         for (const [userId, completed] of userCumulative) {
           if (completed < 1) continue;

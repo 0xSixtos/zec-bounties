@@ -77,8 +77,13 @@ function loadRoutes(prisma) {
     }, { filename });
     return module.exports;
   }
+  const activity = load("utils/bountyActivity.js", {
+    "../prisma/client": prisma, "../middleware/websocket": { sendToUser: noOp },
+    "./userSelects": require(path.join(backend, "utils/userSelects")),
+  });
   const helpers = load("utils/bountyHelpers.js", {
     "../prisma/client": prisma, "./cache": cache, "./sendMail": noOp, "./notifyUser": noOp,
+    "../middleware/websocket": { sendRealtimeUpdate: (...args) => broadcasts.push(json(args)) },
   });
   const router = Object.fromEntries(["get", "post", "put", "patch", "delete"].map(method => [method,
     (url, ...callbacks) => routes.set(`${method} ${url}`, callbacks.at(-1)),
@@ -88,11 +93,20 @@ function loadRoutes(prisma) {
     "../helpers/email": {}, "../middleware/auth": { authenticate: noOp, isAdmin: noOp, optionalAuthenticate: noOp, signSessionToken: noOp },
     "../middleware/websocket": { sendRealtimeUpdate: (...args) => broadcasts.push(json(args)) },
     "../utils/cache": cache, "../utils/sendMail": noOp, "../utils/notifyUser": noOp,
+    "../utils/suggestionSettings": { getSuggestionSettings: async () => ({ mode: "open", threshold: 0 }) },
     "../utils/discord/discordNotify": { notifyNewBounty: noOp },
     "../utils/discord/discordAssignWebhook": { notifyAssignment: noOp },
     "../utils/constants": {}, "../helpers/validateBounty": {},
     "../utils/userIdentity": require(path.join(backend, "utils/userIdentity")),
     "../utils/userSelects": require(path.join(backend, "utils/userSelects")),
+    "../utils/privacy": require(path.join(backend, "utils/privacy")),
+    "../utils/bountySuggestionReview": require(path.join(backend, "utils/bountySuggestionReview")),
+    // Real activity rows. Passing a client skips the unawaited fan-out, which
+    // could outlive the test schema.
+    "../utils/bountyActivity": {
+      logActivity: (client, entry) => activity.logActivity(client ?? prisma, entry),
+      publishActivity: noOp,
+    },
     "../utils/bountyHelpers": helpers,
   });
   for (const key of ["post /apply", "put /applications/:applicationId", "delete /applications/:applicationId"])
@@ -217,7 +231,7 @@ async function duplicateWithdrawal(f) {
     assert.equal(first.reply.statusCode, 200);
     assert.equal(first.reply.body.message, "Application withdrawn successfully");
     assert.deepEqual(routes[0].errors, [], "the successful first withdrawal must not report an error");
-    assert.deepEqual(routes[0].broadcasts, [["application_deleted", { id: f.application.id, bountyId: f.bounty.id }, f.applicant.id]]);
+    assert.deepEqual(routes[0].broadcasts, [["application_deleted", { id: f.application.id, bountyId: f.bounty.id }, f.applicant.id, null]]);
     assert.ok(routes[0].invalidations.some(([kind, key]) => kind === "delete" && key === `applications:user:${f.applicant.id}`));
     const beforeSecond = await snapshot(clients[2], f);
     assert.deepEqual(beforeSecond, { application: null, bountyStatus: "TO_DO", isApproved: true, roster: [] });
@@ -260,7 +274,7 @@ test("actual application lifecycle with isolated real PostgreSQL", { skip: !conf
         assert.equal(reply.statusCode, 200);
         assert.equal(reply.body.message, "Application withdrawn successfully");
         assert.deepEqual(await snapshot(db, f), { application: null, bountyStatus: "TO_DO", isApproved: true, roster: [] });
-        assert.deepEqual(route.broadcasts, [["application_deleted", { id: f.application.id, bountyId: f.bounty.id }, f.applicant.id]]);
+        assert.deepEqual(route.broadcasts, [["application_deleted", { id: f.application.id, bountyId: f.bounty.id }, f.applicant.id, null]]);
         assert.ok(route.invalidations.some(([kind, key]) => kind === "delete" && key === `applications:user:${f.applicant.id}`));
       } finally { route.close(); }
     });

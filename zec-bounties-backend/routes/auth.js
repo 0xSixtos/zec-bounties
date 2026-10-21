@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const express = require("express");
 const axios = require("axios");
 const bcrypt = require("bcrypt");
@@ -38,13 +39,26 @@ const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const DISCORD_REDIRECT_URI = `${process.env.BACKEND_URL || "http://localhost:5000"}/auth/discord/callback`;
 
 router.get("/github", (req, res) => {
-  const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=user:email`;
-  res.redirect(githubAuthUrl);
+  const state = crypto.randomBytes(16).toString("hex");
+  res.cookie("gh_state", state, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 10 * 60 * 1000,
+  });
+  res.redirect(
+    `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=user:email&state=${state}`,
+  );
 });
 
 // GitHub callback
 router.get("/github/callback", async (req, res) => {
-  const { code, error, error_description } = req.query;
+  const { code, state, error, error_description } = req.query;
+
+  if (!state || state !== req.cookies?.gh_state) {
+    return res.redirect(`${FRONTEND_URL}/login?error=oauth_failed`);
+  }
+  res.clearCookie("gh_state");
 
   if (error) {
     console.log(`GitHub OAuth error: ${error} - ${error_description}`);
@@ -94,30 +108,33 @@ router.get("/github/callback", async (req, res) => {
     );
 
     const githubUser = userResponse.data;
-    const githubId = githubUser.id.toString();
-    const primaryEmail = verifiedPrimaryEmail(emailResponse.data);
+const githubId = githubUser.id.toString();
+const primaryEmail = verifiedPrimaryEmail(emailResponse.data);
+if (!primaryEmail) {
+  console.log("No verified primary email for GitHub user");
+  return res.redirect(`${FRONTEND_URL}/login?error=no_email`);
+}
 
-    if (!primaryEmail) {
-      console.log("No verified primary email for GitHub user");
-      return res.redirect(`${FRONTEND_URL}/login?error=no_email`);
-    }
+// 1. Key on the immutable GitHub ID first.
+let user = await prisma.user.findFirst({ where: { githubId } });
+if (isOtherGithubAccount(user, githubId)) {
+  console.log("Email belongs to an account linked to another GitHub user");
+  return res.redirect(`${FRONTEND_URL}/login?error=account_mismatch`);
+}
 
-    let user = await prisma.user.findUnique({
-      where: { email: primaryEmail },
-    });
+if (!user) {
+  const byEmail = await prisma.user.findFirst({
+    where: { email: { equals: primaryEmail, mode: "insensitive" } },
+  });
 
-    if (isOtherGithubAccount(user, githubId)) {
-      console.log("Email belongs to an account linked to another GitHub user");
-      return res.redirect(`${FRONTEND_URL}/login?error=account_mismatch`);
-    }
+      if (byEmail) {
+        // Existing account (e.g. a migrated legacy one) with no GitHub link yet.
+        // Don't auto-link or log in as it. Send the user to an authenticated link flow.
+        return res.redirect(`${FRONTEND_URL}/login?error=account_exists`);
+      }
 
-    if (!user) {
       let nickname = githubUser.login.toLowerCase();
-
-      const exists = await prisma.user.findUnique({
-        where: { nickname },
-      });
-
+      const exists = await prisma.user.findUnique({ where: { nickname } });
       if (exists) {
         nickname = `${nickname}.${Math.floor(Math.random() * 10000)}`;
       }
@@ -130,14 +147,6 @@ router.get("/github/callback", async (req, res) => {
           githubId,
           avatar: githubUser.avatar_url,
           role: "CLIENT",
-        },
-      });
-    } else if (!user.githubId) {
-      user = await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          githubId,
-          avatar: githubUser.avatar_url,
         },
       });
     }
@@ -439,7 +448,7 @@ router.get("/has-zcash-params", authenticate, async (req, res) => {
 router.patch("/update-zaddress", authenticate, async (req, res) => {
   const { z_address } = req.body;
 
- // Validate before storing. This value is later used as a payout destination
+  // Validate before storing. This value is later used as a payout destination
   // and interpolated into the zingo-cli send command, so it must contain only
   // the base58/bech32 characters a real Zcash address uses — no quotes,
   // whitespace or control characters that could break out of that command.
@@ -515,9 +524,17 @@ router.post("/recovery/request-otp", authenticate, async (req, res) => {
 
     const issued = otpStore.issue(req.user.id);
 
+    if (issued.error === "locked") {
+      return res.status(429).json({
+        error: "Too many incorrect attempts. Please try again later.",
+        retryAfterMs: issued.retryAfterMs,
+      });
+    }
+
     if (issued.error === "cooldown") {
       return res.status(429).json({
-        error: "An OTP was sent recently. Please wait before requesting another.",
+        error:
+          "An OTP was sent recently. Please wait before requesting another.",
         retryAfterMs: issued.retryAfterMs,
       });
     }
@@ -559,8 +576,9 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
   }
 
   if (result.status === "locked") {
-    return res.status(401).json({
-      error: "Too many incorrect attempts. Request a new one.",
+    return res.status(429).json({
+      error: "Too many incorrect attempts. Please try again later.",
+      retryAfterMs: result.retryAfterMs,
     });
   }
 
@@ -571,20 +589,22 @@ router.post("/recovery/verify-otp", authenticate, async (req, res) => {
   }
 
   try {
-    // Find the wallet params belonging to this user.
-    // walletId is now the source of truth for the wallet directory.
+    // Find the user's PERSONAL wallet params. Team wallet copies are shared, so
+    // they are not recoverable here; scoping to teamId: null excludes them (a
+    // user may hold a personal and a team wallet with the same accountName).
+    // Team-wallet recovery, if ever needed, must be a separate OWNER-only,
+    // requireTeamAdmin-gated endpoint.
     const zcashParam = await prisma.zcashParams.findFirst({
       where: {
         accountName,
         ownerId: req.user.id,
+        teamId: null,
       },
       select: {
         walletId: true,
         accountName: true,
         chain: true,
         serverUrl: true,
-        isTeam: true,
-        teamId: true,
       },
     });
 

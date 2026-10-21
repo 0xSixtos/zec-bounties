@@ -466,6 +466,30 @@ export default function PublicUserProfilePage() {
                 </CardContent>
               </Card>
 
+              <div className="flex items-center justify-end gap-2">
+                <span className="text-xs text-muted-foreground">Network</span>
+                <div className="inline-flex rounded-md border p-0.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={chain === "MAIN" ? "default" : "ghost"}
+                    className="h-7 px-3 text-xs"
+                    onClick={() => setChain("MAIN")}
+                  >
+                    Mainnet
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={chain === "TEST" ? "default" : "ghost"}
+                    className="h-7 px-3 text-xs"
+                    onClick={() => setChain("TEST")}
+                  >
+                    Testnet
+                  </Button>
+                </div>
+              </div>
+
               {isAdmin && (
                 <StaffViewCard
                   chain={chain === "TEST" ? "TEST" : "MAIN"}
@@ -507,28 +531,7 @@ export default function PublicUserProfilePage() {
                   )}
                 </CardContent>
               </Card>
-              <div className="flex items-center justify-end">
-                <div className="inline-flex rounded-md border p-0.5">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={chain === "MAIN" ? "default" : "ghost"}
-                    className="h-7 px-3 text-xs"
-                    onClick={() => setChain("MAIN")}
-                  >
-                    Mainnet
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={chain === "TEST" ? "default" : "ghost"}
-                    className="h-7 px-3 text-xs"
-                    onClick={() => setChain("TEST")}
-                  >
-                    Testnet
-                  </Button>
-                </div>
-              </div>
+
               <div className="grid grid-cols-2 imd:grid-cols-4 gap-3">
                 <Card>
                   <CardContent className="pt-4 pb-4">

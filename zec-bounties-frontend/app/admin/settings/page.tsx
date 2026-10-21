@@ -81,6 +81,7 @@ import {
   Ban,
 } from "lucide-react";
 import { useBounty } from "@/lib/bounty-context";
+import { backendUrl } from "@/lib/configENV";
 import type { ZcashParams, Team, RecoveryData } from "@/lib/types";
 import { ImportWalletModal } from "@/components/settings/import-modal";
 import { useToast } from "@/hooks/use-toast";
@@ -330,9 +331,11 @@ type Section =
   | "wallets"
   | "recovery"
   | "network"
+  | "system"
   | "sync"
   | "team-hunter"
   | "task-access"
+  | "suggestion-settings"
   | "danger";
 
 const NAV: {
@@ -345,6 +348,7 @@ const NAV: {
   { id: "wallets", label: "Wallets", icon: Wallet, group: "config" },
   { id: "recovery", label: "Recovery", icon: KeyRound, group: "config" },
   { id: "network", label: "Network", icon: Globe, group: "config" },
+  { id: "system", label: "System", icon: Cpu, adminOnly: true, group: "config" },
   {
     id: "team-hunter",
     label: "Team → Hunter",
@@ -356,6 +360,13 @@ const NAV: {
     id: "task-access",
     label: "Task access",
     icon: Ban,
+    adminOnly: true,
+    group: "teams",
+  },
+  {
+    id: "suggestion-settings",
+    label: "Suggestion settings",
+    icon: Shield,
     adminOnly: true,
     group: "teams",
   },
@@ -1117,6 +1128,142 @@ function RoleConversionPanel() {
   );
 }
 
+
+function SuggestionSettingsPanel() {
+  const { currentUser } = useBounty();
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState<"closed" | "open" | "threshold">("threshold");
+  const [threshold, setThreshold] = useState(5);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `${backendUrl}/api/admin/suggestion-settings`,
+          { headers: { Authorization: `Bearer ${localStorage.getItem("authToken") || ""}` } },
+        );
+        if (!res.ok) throw new Error("Failed to load");
+        const data = await res.json();
+        if (!cancelled) {
+          setMode(data.mode);
+          setThreshold(data.threshold ?? 5);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          toast({
+            title: "Error",
+            description: "Could not load suggestion settings.",
+            variant: "destructive",
+          });
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [toast]);
+
+  if (currentUser?.role !== "ADMIN") {
+    return (
+      <EmptyState
+        icon={Shield}
+        title="Admin access required"
+        hint="You don't have permission to manage suggestion settings."
+      />
+    );
+  }
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `${backendUrl}/api/admin/suggestion-settings`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("authToken") || ""}`,
+          },
+          body: JSON.stringify({ mode, threshold }),
+        },
+      );
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || "Save failed");
+      }
+      toast({ title: "Saved", description: "Suggestion settings updated." });
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : "Save failed.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <RefreshCw className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 max-w-lg">
+      <div className="space-y-3">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="radio"
+            name="suggestion-mode"
+            checked={mode === "closed"}
+            onChange={() => setMode("closed")}
+          />
+          <span>Closed — no hunter suggestions</span>
+        </label>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="radio"
+            name="suggestion-mode"
+            checked={mode === "open"}
+            onChange={() => setMode("open")}
+          />
+          <span>Open — no completion restrictions</span>
+        </label>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="radio"
+            name="suggestion-mode"
+            checked={mode === "threshold"}
+            onChange={() => setMode("threshold")}
+          />
+          <span>Open if completed at least</span>
+          <Input
+            type="number"
+            min={0}
+            max={1000}
+            value={threshold}
+            onChange={(e) => setThreshold(Number(e.target.value))}
+            disabled={mode !== "threshold"}
+            className="w-20 h-8"
+          />
+          <span>bounties</span>
+        </label>
+      </div>
+      <Button onClick={save} disabled={saving}>
+        {saving ? "Saving…" : "Save"}
+      </Button>
+    </div>
+  );
+}
+
 function TaskAccessPanel() {
   const { currentUser, users, usersLoading, setUserTaskAccess } = useBounty();
   const { toast } = useToast();
@@ -1597,6 +1744,105 @@ function WalletCard({
 // Main settings page
 // ─────────────────────────────────────────────────────────────────────────────
 
+type VersionRow = {
+  name: string;
+  version: string;
+  source: string;
+  status: "ok" | "missing" | "unavailable";
+  detail: string | null;
+};
+
+function SystemPanel() {
+  const [rows, setRows] = useState<VersionRow[]>([]);
+  const [collectedAt, setCollectedAt] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const token = localStorage.getItem("authToken");
+      const res = await fetch(`${backendUrl}/api/admin/versions`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setRows(data.components ?? []);
+      setCollectedAt(data.collectedAt ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load versions");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const dot = (status: VersionRow["status"]) =>
+    status === "ok"
+      ? "bg-emerald-500"
+      : status === "missing"
+        ? "bg-amber-500"
+        : "bg-red-500";
+
+  return (
+    <div>
+      <PageHeader
+        icon={Cpu}
+        title="System"
+        description="Versions of the software this install is running. Cached for 60 seconds."
+        actions={
+          <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+            <RefreshCw className={cn("w-3.5 h-3.5 mr-1.5", loading && "animate-spin")} />
+            Refresh
+          </Button>
+        }
+      />
+
+      {error && (
+        <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-300">
+          {error}
+        </div>
+      )}
+
+      <div className="rounded-xl border bg-card divide-y">
+        {rows.map((r) => (
+          <div key={r.name} className="flex items-center gap-3 px-4 py-3">
+            <span className={cn("h-2 w-2 rounded-full shrink-0", dot(r.status))} />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">{r.name}</p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {r.source}
+                {r.detail ? ` · ${r.detail}` : ""}
+              </p>
+            </div>
+            {r.name === "nym-proxy" && r.status === "ok" ? (
+              <span className="inline-flex items-center gap-1.5 shrink-0">
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#6C4AB6] text-[10px] font-bold text-white">N</span>
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              </span>
+            ) : (
+              <span className="font-mono text-xs text-right shrink-0">{r.version}</span>
+            )}
+          </div>
+        ))}
+        {!loading && rows.length === 0 && !error && (
+          <p className="px-4 py-6 text-sm text-muted-foreground">No version data.</p>
+        )}
+      </div>
+
+      {collectedAt && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Collected {new Date(collectedAt).toLocaleString()}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const {
     currentUser,
@@ -2004,10 +2250,18 @@ export default function SettingsPage() {
               </span>
             </div>
 
-            <RecoveryPanel
-              key={activeConfig.accountName}
-              config={activeConfig}
-            />
+            {getWalletType(activeConfig) === "team" ? (
+              <EmptyState
+                icon={KeyRound}
+                title="Team wallet"
+                hint="You cannot recover a team wallet from a personal account. To recover the seed phrase of a personal wallet, set it as your default wallet."
+              />
+            ) : (
+              <RecoveryPanel
+                key={activeConfig.accountName}
+                config={activeConfig}
+              />
+            )}
           </div>
         ) : (
           <EmptyState
@@ -2018,6 +2272,11 @@ export default function SettingsPage() {
         )}
       </div>
     );
+  }
+
+
+  function renderSystem() {
+    return <SystemPanel />;
   }
 
   function renderNetwork() {
@@ -2155,6 +2414,19 @@ export default function SettingsPage() {
     );
   }
 
+  function renderSuggestionSettings() {
+    return (
+      <div>
+        <PageHeader
+          icon={Shield}
+          title="Suggestion settings"
+          description="Control who can suggest bounties. Weekly limits and per-user blocks still apply."
+        />
+        <SuggestionSettingsPanel />
+      </div>
+    );
+  }
+
   function renderDanger() {
     const deletable = allWallets.filter((w) => !w.isTeam);
     return (
@@ -2218,9 +2490,11 @@ export default function SettingsPage() {
     wallets: renderWallets,
     recovery: renderRecovery,
     network: renderNetwork,
+    system: renderSystem,
     sync: renderSync,
     "team-hunter": renderTeamHunter,
     "task-access": renderTaskAccess,
+    "suggestion-settings": renderSuggestionSettings,
     danger: renderDanger,
   };
 
