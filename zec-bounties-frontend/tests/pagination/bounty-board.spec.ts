@@ -126,6 +126,20 @@ async function scrollForMore(page: Page) {
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
 }
 
+async function openFilters(page: Page) {
+  const panel = page.getByRole("dialog");
+  if (await panel.isVisible().catch(() => false)) return;
+  await page.getByRole("button", { name: "Filters" }).click();
+  await panel.waitFor({ state: "visible" });
+}
+
+async function selectFilter(page: Page, label: string, optionLabel: string) {
+  await openFilters(page);
+  await page.getByRole("button", { name: label, exact: true }).click();
+  await page.getByRole("option", { name: optionLabel }).click();
+}
+
+
 test("combines shareable bounty filters and keeps them when reopened on mobile", async ({ page }) => {
   const rows = Array.from({ length: 10 }, (_, index) => {
     const row = bounty(index + 1);
@@ -161,21 +175,20 @@ test("combines shareable bounty filters and keeps them when reopened on mobile",
     ],
   });
 
-  const status = page.getByRole("combobox", { name: "Status" });
-  await status.selectOption("assigned");
+  await selectFilter(page, "Status", "Assigned");
   await expect(cards(page)).toHaveCount(1);
   await expect(page.getByText("Pagination bounty 03", { exact: true })).toBeVisible();
-  await status.selectOption("in_review");
+  await selectFilter(page, "Status", "In review");
   await expect(cards(page)).toHaveCount(1);
   await expect(page.getByText("Pagination bounty 04", { exact: true })).toBeVisible();
-  await status.selectOption("open");
+  await selectFilter(page, "Status", "Open");
 
-  await page.getByRole("combobox", { name: "Team" }).selectOption("team-a");
+  await selectFilter(page, "Team", "Alpha Team");
   await page.getByRole("button", { name: /^Web Development/ }).click();
   await page.getByRole("spinbutton", { name: "Minimum reward" }).fill("0.2");
   await page.getByRole("spinbutton", { name: "Maximum reward" }).fill("0.5");
-  await page.getByLabel("Deadline on or before").fill("2026-10-07");
-  await page.getByRole("combobox", { name: "Status" }).selectOption("open");
+  await page.getByLabel("Deadline (on or before)").fill("2026-10-07");
+  await selectFilter(page, "Status", "Open");
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.getByPlaceholder("Search bounties...").last().fill("wallet alpha");
   await page.getByRole("tab", { name: /Namada/ }).click();
@@ -193,15 +206,17 @@ test("combines shareable bounty filters and keeps them when reopened on mobile",
   expect(fixture.requestedPages).toEqual([]);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("combobox", { name: "Sort bounties" })).toBeVisible();
+  await openFilters(page);
+  await expect(page.getByRole("button", { name: "Sort by" })).toBeVisible();
   const sharedUrl = page.url();
   await page.goto(sharedUrl);
   await expect(cards(page)).toHaveCount(1);
-  await expect(page.getByRole("combobox", { name: "Team" })).toHaveValue("team-a");
-  await expect(page.getByRole("combobox", { name: "Status" })).toHaveValue("open");
+  await openFilters(page);
+  await expect(page.getByRole("button", { name: "Team", exact: true })).toContainText("Alpha Team");
+  await expect(page.getByRole("button", { name: "Status", exact: true })).toContainText("Open");
   await expect(page.getByRole("spinbutton", { name: "Minimum reward" })).toHaveValue("0.2");
 
-  await page.getByRole("button", { name: "Clear filters" }).click();
+  await page.getByRole("button", { name: "Clear all" }).click();
   await expect(cards(page)).toHaveCount(10);
   await expect(page).toHaveURL("http://127.0.0.1:3127/home");
 });
@@ -216,11 +231,11 @@ test("sorts the full bounty set by reward and deadline", async ({ page }) => {
   }));
   await openBoard(page, rows.length, { rows });
 
-  await page.getByRole("combobox", { name: "Sort bounties" }).selectOption("highest_reward");
+  await selectFilter(page, "Sort by", "Highest reward");
   await expect(cards(page).first()).toHaveText("Pagination bounty 01");
   await expect(page).toHaveURL(/sort=highest_reward/);
 
-  await page.getByRole("combobox", { name: "Sort bounties" }).selectOption("soonest_deadline");
+  await selectFilter(page, "Sort by", "Soonest deadline");
   await expect(cards(page).first()).toHaveText("Pagination bounty 12");
   await expect(page).toHaveURL(/sort=soonest_deadline/);
 });

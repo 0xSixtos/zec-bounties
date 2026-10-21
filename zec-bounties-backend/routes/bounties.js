@@ -288,7 +288,7 @@ function getCalendarWeekBounds(date = new Date()) {
 async function announceNewBounty(bounty, creatorId, recipients) {
   try {
     const creatorDisplayName =
-      bounty.createdByUser.nickname || bounty.createdByUser.name;
+      bounty.createdByUser?.nickname || bounty.createdByUser?.name || "Unknown";
 
     const cachedUsers = await getCache("users:all");
 
@@ -1149,13 +1149,16 @@ router.patch("/:id/approve", authenticate, isAdmin, async (req, res) => {
     res.json(updated);
 
     // A bounty created unapproved was not announced, so announce it now.
+    // Use the updated row from the transaction (it already includes createdByUser
+    // when the caller supplied an include). Re-fetch only if it is missing.
     if (!bounty.isApproved) {
-      const full = await prisma.bounty.findUnique({
-        where: { id: req.params.id },
-        include: {
-          createdByUser: { select: USER_SELECT },
-        },
-      });
+      let full = updated;
+      if (!full.createdByUser) {
+        full = await prisma.bounty.findUnique({
+          where: { id: req.params.id },
+          include: { createdByUser: { select: USER_SELECT } },
+        });
+      }
       if (full && !full.isPrivate) {
         notifyNewBounty(full);
         getBroadcastRecipients(full)
