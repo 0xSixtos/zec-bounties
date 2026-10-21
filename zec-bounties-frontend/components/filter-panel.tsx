@@ -183,6 +183,7 @@ export function FilterPanel({
         size="sm"
         className="h-8 gap-1.5 rounded-full px-3"
         onClick={() => setOpen((o) => !o)}
+        aria-label={title}
         aria-haspopup="dialog"
         aria-expanded={open}
       >
