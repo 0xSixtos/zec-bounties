@@ -4,6 +4,7 @@ const { authenticate, isAdmin } = require("../middleware/auth");
 const { delCache, bumpVersion } = require("../utils/cache");
 const { userIdentityWhere } = require("../utils/userIdentity");
 const { rawAddressFields } = require("../helpers/publicProfileAddress");
+const { receiversForUser } = require("../helpers/addressReceivers");
 const {
   assignedDoneWhere,
   recentCompletedWhere,
@@ -482,12 +483,10 @@ router.get("/:idOrNickname/public", async (req, res) => {
       // showAddressType advertises the KIND of address, not the address itself.
       Object.assign(profile, rawAddressFields(user, { isOwner, isAdmin }));
 
-      // Start empty; frontend fills from WASM (or falls back below)
-      profile.receivers = {
-        ironwood: false,
-        sapling: false,
-        transparent: false,
-      };
+      // Visitors no longer receive the raw address, so the icons cannot decode
+      // it client-side. Return the three flags instead. Owner/admin still get
+      // the address and may refine these with the browser WASM decoder.
+      profile.receivers = await receiversForUser(user);
     }
     if (show("showRecentBounties")) {
       profile.recentCompleted = stripAmountsIfPrivate(

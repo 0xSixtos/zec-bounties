@@ -215,25 +215,33 @@ export default function PublicUserProfilePage() {
     }
   };
 
-  // Decode UA → receivers whenever profile changes (same as KPI dashboard)
+  // Visitors do not receive the raw address. Use the backend flags. Owner and
+  // admin still receive the address and refine those flags with the browser
+  // WASM decoder (same path as the KPI dashboard).
   useEffect(() => {
     let cancelled = false;
     setReceivers(null);
 
     if (!v?.showAddressType) return;
 
+    const fromApi = (profile as any)?.receivers;
     const addr =
       (profile as any).UA_address || (profile as any).z_address || null;
 
     if (!addr) {
-      setReceivers({ ironwood: false, sapling: false, transparent: false });
+      setReceivers(
+        fromApi ?? { ironwood: false, sapling: false, transparent: false },
+      );
       return;
     }
 
     (async () => {
       try {
         await initAddressDecoder();
-        if (cancelled || !isDecoderReady()) return;
+        if (cancelled || !isDecoderReady()) {
+          if (!cancelled && fromApi) setReceivers(fromApi);
+          return;
+        }
 
         const r = getAddressReceivers(addr) as any;
         if (cancelled) return;
@@ -246,7 +254,9 @@ export default function PublicUserProfilePage() {
       } catch (err) {
         console.error("Address decode failed:", err);
         if (!cancelled) {
-          setReceivers({ ironwood: false, sapling: false, transparent: false });
+          setReceivers(
+            fromApi ?? { ironwood: false, sapling: false, transparent: false },
+          );
         }
       }
     })();
@@ -254,7 +264,7 @@ export default function PublicUserProfilePage() {
     return () => {
       cancelled = true;
     };
-  }, [profile?.id, v?.showAddressType]);
+  }, [profile?.id, v?.showAddressType, (profile as any)?.receivers]);
 
   const chainStats = profile?.statsByChain?.[chain];
   const completed = chainStats?.completed ?? profile?.completed ?? 0;
