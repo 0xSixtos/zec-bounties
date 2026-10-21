@@ -24,7 +24,7 @@ test("concurrent creation respects weekly quotas in PostgreSQL", {
       ["Gold can fill both available slots", ["bounties", "teams"], true, 0],
     ]) {
       await t.test(label, async () => {
-        const user = await db.user.create({ data: { id: `quota-${randomUUID()}`, name: "Quota test", role: "TEAM", badges: gold ? ["avatar:15"] : [], emailNotifications: false, pushNotifications: false } });
+        const user = await db.user.create({ data: { id: `quota-${randomUUID()}`, name: "Quota test", role: "HUNTER", badges: gold ? ["avatar:15"] : [], emailNotifications: false, pushNotifications: false } });
         userIds.push(user.id);
         const team = await db.team.create({ data: { name: `Quota ${randomUUID()}`, isVerified: true, members: { create: { userId: user.id, role: "OWNER" } } } });
         teamIds.push(team.id);
