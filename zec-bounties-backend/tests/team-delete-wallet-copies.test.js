@@ -27,10 +27,10 @@ function createDb() {
     { teamId: "team-1", userId: "member", role: "MEMBER" },
   ];
   const wallets = [
-    { id: 1, ownerId: "owner", accountName: "Team", teamId: "team-1", walletId: "team-wallet", isDefault: true, createdAt: 3 },
-    { id: 2, ownerId: "member", accountName: "Team", teamId: "team-1", walletId: "team-wallet", isDefault: true, createdAt: 4 },
-    { id: 3, ownerId: "member", accountName: "Main", teamId: null, walletId: "member-main", isDefault: false, createdAt: 1 },
-    { id: 4, ownerId: "other", accountName: "Team", teamId: "team-2", walletId: "other-team", isDefault: true, createdAt: 2 },
+    { id: 1, ownerId: "owner", accountName: "Team", teamId: "team-1", walletId: "team-wallet", isTeam: true, isDefault: true, createdAt: 3 },
+    { id: 2, ownerId: "member", accountName: "Team", teamId: "team-1", walletId: "team-wallet", isTeam: true, isDefault: true, createdAt: 4 },
+    { id: 3, ownerId: "member", accountName: "Main", teamId: null, walletId: "member-main", isTeam: false, isDefault: false, createdAt: 1 },
+    { id: 4, ownerId: "other", accountName: "Team", teamId: "team-2", walletId: "other-team", isTeam: true, isDefault: true, createdAt: 2 },
   ];
   const matches = (row, where = {}) =>
     Object.entries(where).every(([key, value]) =>
@@ -38,11 +38,7 @@ function createDb() {
         ? value.in.includes(row[key])
         : row[key] === value,
     );
-  return {
-    teams,
-    members,
-    wallets,
-    zcashParams: {
+  const zcashParams = {
       findFirst: async ({ where, orderBy }) => {
         const rows = wallets.filter((row) => matches(row, where));
         if (orderBy) rows.sort((a, b) => b.createdAt - a.createdAt);
@@ -56,6 +52,14 @@ function createDb() {
       },
       update: async ({ where, data }) =>
         Object.assign(wallets.find((row) => row.id === where.id), data),
+    };
+  return {
+    teams,
+    members,
+    wallets,
+    zcashParams,
+    async $transaction(fn) {
+      return fn({ zcashParams });
     },
     teamMember: {
       findUnique: async ({ where }) =>
@@ -134,7 +138,7 @@ function assertCopiesRemoved(db) {
   assert.equal(db.wallets.find((w) => w.id === 3).isDefault, true);
   // Another team's wallet is left alone.
   assert.deepEqual(db.wallets.find((w) => w.id === 4), {
-    id: 4, ownerId: "other", accountName: "Team", teamId: "team-2", walletId: "other-team", isDefault: true, createdAt: 2,
+    id: 4, ownerId: "other", accountName: "Team", teamId: "team-2", walletId: "other-team", isTeam: true, isDefault: true, createdAt: 2,
   });
 }
 
@@ -194,4 +198,58 @@ test("deleting a team without a wallet leaves members' wallets alone", async () 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(teams.effects.removedDirs, []);
   assert.deepEqual(db.wallets, before);
+});
+
+test("a personal wallet is preferred over a newer team wallet as the fallback default", async () => {
+  const db = createDb();
+  // Member also belongs to team-2 and that copy is newer than their personal wallet.
+  db.wallets.push({
+    id: 5, ownerId: "member", accountName: "Team", teamId: "team-2", walletId: "other-team",
+    isTeam: true, isDefault: false, createdAt: 5,
+  });
+  const teams = loadRoutes("teams.js", db);
+  const res = await teams.call("delete /:teamId", {
+    user: owner,
+    params: { teamId: "team-1" },
+  });
+  assert.equal(res.statusCode, 200);
+  // Personal wallet (id 3) becomes default, not the newer team-2 copy (id 5).
+  assert.equal(db.wallets.find((w) => w.id === 3).isDefault, true);
+  assert.equal(db.wallets.find((w) => w.id === 5).isDefault, false);
+});
+
+test("a renamed team wallet's older copies are still removed", async () => {
+  const db = createDb();
+  // An older copy under a previous account name for the same team.
+  db.wallets.push({
+    id: 6, ownerId: "member", accountName: "OldName", teamId: "team-1", walletId: "team-wallet",
+    isTeam: true, isDefault: false, createdAt: 0,
+  });
+  const teams = loadRoutes("teams.js", db);
+  const res = await teams.call("delete /:teamId", {
+    user: owner,
+    params: { teamId: "team-1" },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(db.wallets.find((w) => w.id === 6), undefined);
+  assert.equal(db.wallets.find((w) => w.id === 3).isDefault, true);
+});
+
+test("a user with only the team wallet is left with no default, not another team wallet", async () => {
+  const db = createDb();
+  // Owner has no personal wallet, only the team-1 copy (already in the fixture)
+  // and a newer team-2 copy.
+  db.wallets.push({
+    id: 7, ownerId: "owner", accountName: "Team", teamId: "team-2", walletId: "other-team",
+    isTeam: true, isDefault: false, createdAt: 9,
+  });
+  const teams = loadRoutes("teams.js", db);
+  const res = await teams.call("delete /:teamId", {
+    user: owner,
+    params: { teamId: "team-1" },
+  });
+  assert.equal(res.statusCode, 200);
+  // team-1 copy is gone; team-2 copy is not promoted to default.
+  assert.equal(db.wallets.find((w) => w.ownerId === "owner" && w.teamId === "team-1"), undefined);
+  assert.equal(db.wallets.find((w) => w.id === 7).isDefault, false);
 });

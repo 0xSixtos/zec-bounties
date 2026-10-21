@@ -157,43 +157,41 @@ async function removeWalletFromMembers(teamId, wallet, userIds) {
   if (!wallet || !userIds.length) return;
 
   for (const userId of userIds) {
-    await prisma.zcashParams
-      .deleteMany({
-        where: {
-          ownerId: userId,
-          accountName: wallet.accountName,
-          teamId,
-        },
-      })
-      .catch(() => {});
-
-    const hasDefault = await prisma.zcashParams.findFirst({
-      where: {
-        ownerId: userId,
-        isDefault: true,
-      },
-    });
-
-    if (!hasDefault) {
-      const latest = await prisma.zcashParams.findFirst({
-        where: {
-          ownerId: userId,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-
-      if (latest) {
-        await prisma.zcashParams.update({
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.zcashParams.deleteMany({
           where: {
-            id: latest.id,
-          },
-          data: {
-            isDefault: true,
+            ownerId: userId,
+            accountName: wallet.accountName,
+            teamId,
           },
         });
-      }
+
+        const hasDefault = await tx.zcashParams.findFirst({
+          where: { ownerId: userId, isDefault: true },
+        });
+        if (hasDefault) return;
+
+        // Only a personal wallet becomes the fallback. Promoting another
+        // team wallet would leave the user with a default they may not
+        // expect, and the UI already handles a missing default.
+        const fallback = await tx.zcashParams.findFirst({
+          where: { ownerId: userId, isTeam: false },
+          orderBy: { createdAt: "desc" },
+        });
+
+        if (fallback) {
+          await tx.zcashParams.update({
+            where: { id: fallback.id },
+            data: { isDefault: true },
+          });
+        }
+      });
+    } catch (err) {
+      console.error(
+        `Failed to remove team wallet copy for user ${userId}:`,
+        err,
+      );
     }
   }
 }
@@ -202,14 +200,24 @@ async function removeWalletFromMembers(teamId, wallet, userIds) {
 // When the team itself is deleted, remove those copies too and give each
 // owner a fallback default. Once the team is gone there is no team page to
 // delete them from, and DELETE /api/zcash/params refuses team copies.
+// Match by teamId alone so a renamed wallet's older copies are still removed.
 async function removeTeamWalletCopies(teamId, wallet) {
   const copies = await prisma.zcashParams.findMany({
-    where: { teamId, accountName: wallet.accountName },
-    select: { ownerId: true },
+    where: { teamId },
+    select: { ownerId: true, accountName: true },
   });
-  await removeWalletFromMembers(teamId, wallet, [
-    ...new Set(copies.map((c) => c.ownerId)),
-  ]);
+  const byName = new Map();
+  for (const c of copies) {
+    if (!byName.has(c.accountName)) byName.set(c.accountName, new Set());
+    byName.get(c.accountName).add(c.ownerId);
+  }
+  for (const [accountName, ownerIds] of byName) {
+    await removeWalletFromMembers(
+      teamId,
+      { ...wallet, accountName },
+      [...ownerIds],
+    );
+  }
 }
 
 const multer = require("multer");
@@ -321,6 +329,12 @@ async function deleteTeamCascade(teamId) {
       },
     });
 
+    // Remove member copies before the directory so a failed cleanup does
+    // not leave the directory gone and the copies still pointing at it.
+    await removeTeamWalletCopies(teamId, team.wallet).catch((err) => {
+      console.error("Failed to remove team wallet copies:", err);
+    });
+
     if (params) {
       const dataDir = getWalletDataDir(params.walletId);
 
@@ -332,8 +346,6 @@ async function deleteTeamCascade(teamId) {
 
       await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
     }
-
-    await removeTeamWalletCopies(teamId, team.wallet).catch(() => {});
   }
 
   await prisma.team.delete({ where: { id: teamId } }).catch(() => {});
@@ -1645,6 +1657,10 @@ router.delete("/:teamId", authenticate, async (req, res) => {
         },
       });
 
+      // Remove member copies before the directory. If this throws, the
+      // directory and team are still intact and the request can be retried.
+      await removeTeamWalletCopies(teamId, team.wallet);
+
       if (params) {
         const dataDir = getWalletDataDir(params.walletId);
 
@@ -1659,8 +1675,6 @@ router.delete("/:teamId", authenticate, async (req, res) => {
           force: true,
         });
       }
-
-      await removeTeamWalletCopies(teamId, team.wallet);
     }
 
     await prisma.team.delete({
