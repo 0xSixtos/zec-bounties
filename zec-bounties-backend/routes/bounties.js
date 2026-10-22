@@ -523,17 +523,15 @@ router.post("/", authenticate, requireTaskCreation, async (req, res) => {
 router.get("/", optionalAuthenticate, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page) || 1);
-    // Clamp to 1..50. A negative value passed Math.min untouched and reached
-    // Prisma as `take: -N`, which reads N rows from the end of the ordering
-    // with no upper bound.
     const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
 
     const isAuthed = Boolean(req.user);
     const isDev = process.env.NODE_ENV !== "production";
     const isAdmin = req.user?.role === "ADMIN";
+    const userId = req.user?.id;
 
     // ------------------------------------------------------------
-    // Chain filter (unchanged)
+    // Chain filter
     // ------------------------------------------------------------
     const chainParam = String(req.query.chain || "MAIN").toUpperCase();
     let chainFilter;
@@ -557,32 +555,52 @@ router.get("/", optionalAuthenticate, async (req, res) => {
     }
 
     // ------------------------------------------------------------
-    // Visibility — public bounties, PLUS any private bounty the viewer
-    // actually has access to: one they created, or one belonging to a
-    // team they're a member of. This is what lets a private team's members
-    // see that team's bounties on their own home feed, not only on the
-    // team's own console page. Admins see everything.
+    // Visibility
     //
-    // This filter runs inside the DB query (not a post-fetch JS filter),
-    // so `take: limit` below always returns a correctly-sized page —
-    // pagination was never actually the risk here, even with this OR.
+    // A bounty is publicly visible only when:
+    // - Bounty.isPrivate is false, AND
+    // - It has no team or its team is not private.
+    //
+    // Admins see all bounties.
+    // Creators and authorized team members retain access to
+    // private bounties under the existing access rules.
+    //
+    // Filtering happens in the database before pagination.
     // ------------------------------------------------------------
-    const userId = req.user?.id;
-
     const visibilityFilter = isAdmin
       ? {}
       : {
           OR: [
-            { isPrivate: false },
+            // Public bounties not owned by private teams.
+            {
+              isPrivate: false,
+              OR: [{ teamId: null }, { team: { isPrivate: false } }],
+            },
+
+            // Creators can see their own individually private bounties.
             ...(userId
               ? [
-                  { isPrivate: true, createdBy: userId },
-                  { isPrivate: true, team: { members: { some: { userId } } } },
-                  ...(req.user.role === "HUNTER"
+                  {
+                    isPrivate: true,
+                    createdBy: userId,
+                  },
+
+                  // Members can see bounties owned by their private team.
+                  {
+                    team: {
+                      isPrivate: true,
+                      members: { some: { userId } },
+                    },
+                  },
+
+                  // Preserve existing hunter access to favorited teams.
+                  ...(req.user?.role === "HUNTER"
                     ? [
                         {
-                          isPrivate: true,
-                          team: { favoritedBy: { some: { userId } } },
+                          team: {
+                            isPrivate: true,
+                            favoritedBy: { some: { userId } },
+                          },
                         },
                       ]
                     : []),
@@ -591,39 +609,56 @@ router.get("/", optionalAuthenticate, async (req, res) => {
           ],
         };
 
-    // const visibilityFilter = {};
-
+    // ------------------------------------------------------------
+    // Optional user filter (admin only)
+    // ------------------------------------------------------------
     const userTerm = String(req.query.user || "").trim();
     let userFilter = {};
+
     if (userTerm) {
       if (!isAdmin) {
         return res.status(403).json({ error: "user filter is admin-only" });
       }
+
       const identity = userIdentityWhere(userTerm);
       const involves = bountyInvolvesUserWhere(identity);
+
       if (involves) userFilter = involves;
     }
 
+    // ------------------------------------------------------------
+    // Audience
+    //
+    // Team bounties belong to hunters (home feed) and the team
+    // console. The admin console lists platform bounties (no team)
+    // plus pending hunter suggestions awaiting review. Filtered in
+    // SQL so `take` returns a full page and `total` matches what
+    // is displayed.
+    // ------------------------------------------------------------
+    const audienceFilter = isAdmin
+      ? { OR: [{ teamId: null }, { suggestionReviewStatus: "PENDING" }] }
+      : {
+          OR: [
+            { suggestionReviewStatus: null },
+            { suggestionReviewStatus: { not: "PENDING" } },
+          ],
+        };
+
+    // ------------------------------------------------------------
+    // Combined query filters
+    //
+    // Filters that carry their own OR go in AND, so spreading never
+    // lets one OR overwrite another.
+    // ------------------------------------------------------------
     const where = {
       ...chainFilter,
-      ...visibilityFilter,
-      ...userFilter,
-      ...(!isAdmin && {
-        AND: [
-          {
-            OR: [
-              { suggestionReviewStatus: null },
-              { suggestionReviewStatus: { not: "PENDING" } },
-            ],
-          },
-        ],
-      }),
+      AND: [visibilityFilter, userFilter, audienceFilter],
     };
 
     // ------------------------------------------------------------
-    // Snapshot version before reading, same as before. Cache key is scoped
-    // per-viewer again (admin / this user's id / anon) since results now
-    // genuinely differ by who's asking, not just by auth level.
+    // Cache — scoped by version, privacy version, viewer and scope.
+    // `scope` also retires old admin entries that still contain
+    // team bounties.
     // ------------------------------------------------------------
     const version = await getVersion("bounties");
     const privacyVersion = await getVersion("privacy");
@@ -634,6 +669,7 @@ router.get("/", optionalAuthenticate, async (req, res) => {
       chain: chainParam,
       viewer: isAdmin ? "admin" : (userId ?? "anon"),
       user: userTerm || "",
+      scope: isAdmin ? "platform" : "feed",
     })}`;
 
     const cached = await getCache(cacheKey);
@@ -642,17 +678,21 @@ router.get("/", optionalAuthenticate, async (req, res) => {
     const { user: assigneeUserSelect, createdByUser: createdByUserSelect } =
       bountyUserSelects({ isAuthed, isAdmin });
 
-    // Always pull profileVisibility so we can redact before the response
-    // (and before the cache write). Admins skip redaction.
+    // Include profileVisibility so private profile fields can be
+    // redacted before returning or caching the response.
     const publicUserSelect = {
       ...assigneeUserSelect,
       profileVisibility: true,
     };
+
     const publicCreatedBySelect = {
       ...createdByUserSelect,
       profileVisibility: true,
     };
 
+    // ------------------------------------------------------------
+    // Fetch the requested page and matching total in parallel
+    // ------------------------------------------------------------
     const [bounties, total] = await Promise.all([
       prisma.bounty.findMany({
         where,
@@ -660,15 +700,33 @@ router.get("/", optionalAuthenticate, async (req, res) => {
         take: limit,
         orderBy: { dateCreated: "desc" },
         include: {
-          assignees: { include: { user: { select: publicUserSelect } } },
-          assigneeUser: { select: publicUserSelect },
-          createdByUser: { select: publicCreatedBySelect },
-          team: { select: { id: true, name: true, logo: true } },
+          assignees: {
+            include: {
+              user: { select: publicUserSelect },
+            },
+          },
+          assigneeUser: {
+            select: publicUserSelect,
+          },
+          createdByUser: {
+            select: publicCreatedBySelect,
+          },
+          team: {
+            select: {
+              id: true,
+              name: true,
+              logo: true,
+            },
+          },
         },
       }),
+
       prisma.bounty.count({ where }),
     ]);
 
+    // ------------------------------------------------------------
+    // Redact user profiles
+    // ------------------------------------------------------------
     const redactUser = (u) => redactPublicUser(u, { forceFull: isAdmin });
 
     const data = bounties.map((b) => ({
@@ -676,7 +734,10 @@ router.get("/", optionalAuthenticate, async (req, res) => {
       assigneeUser: redactUser(b.assigneeUser),
       createdByUser: redactUser(b.createdByUser),
       assignees: Array.isArray(b.assignees)
-        ? b.assignees.map((a) => ({ ...a, user: redactUser(a.user) }))
+        ? b.assignees.map((a) => ({
+            ...a,
+            user: redactUser(a.user),
+          }))
         : b.assignees,
     }));
 
@@ -1164,7 +1225,9 @@ router.patch("/:id/approve", authenticate, isAdmin, async (req, res) => {
       if (full && !full.isPrivate) {
         notifyNewBounty(full);
         getBroadcastRecipients(full)
-          .then((recipients) => announceNewBounty(full, bounty.createdBy, recipients))
+          .then((recipients) =>
+            announceNewBounty(full, bounty.createdBy, recipients),
+          )
           .catch(console.error);
       }
     }
