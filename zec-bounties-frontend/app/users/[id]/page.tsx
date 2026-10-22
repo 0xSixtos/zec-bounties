@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/navbar";
+import { AdminNavbar } from "@/components/layout/admin/navbar";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { useBounty } from "@/lib/bounty-context";
 import { backendUrl } from "@/lib/configENV";
@@ -294,7 +295,7 @@ export default function PublicUserProfilePage() {
   return (
     <ProtectedRoute>
       <main className="min-h-screen bg-background">
-        <Navbar />
+        {isAdmin ? <AdminNavbar /> : <Navbar />}
         <div
           key={idOrNickname}
           className="max-w-3xl mx-auto px-4 sm:px-6 py-8 space-y-6"
