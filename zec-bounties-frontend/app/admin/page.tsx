@@ -522,23 +522,26 @@ export default function AdminDashboard() {
   const [peopleLoading, setPeopleLoading] = useState(false);
   const [groupByAssignee, setGroupByAssignee] = useState(false);
   const [groupByWeek, setGroupByWeek] = useState(true);
+  const [teamlessReady, setTeamlessReady] = useState(false);
 
   // User search stays on the admin list. Server does the involvement filter;
   // we load every page and skip the client-side re-filter so cancelled and
   // partial matches are not dropped.
+
   useEffect(() => {
     if (!fetchBounties) return;
     let cancelled = false;
+
+    // No debounce for the initial load or when the search is cleared.
+    const delay = serverUser ? 250 : 0;
+
     const timer = setTimeout(async () => {
-      await fetchBounties(
-        true,
-        serverUser
-          ? { user: serverUser, teamless: true }
-          : { user: "", teamless: true },
-      );
-      if (cancelled || !serverUser) return;
-      await loadAllBounties();
-    }, 250);
+      await fetchBounties(true, { user: serverUser || "", teamless: true });
+      if (cancelled) return;
+      setTeamlessReady(true);
+      if (serverUser) await loadAllBounties();
+    }, delay);
+
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -699,6 +702,9 @@ export default function AdminDashboard() {
       }),
     [filteredBounties, getAllApplicationsForBounty, allSubmissions],
   );
+
+  const listLoading =
+    !teamlessReady || (bountiesLoading && bountyRows.length === 0);
 
   // Desktop-only grouping: collapses bounties under week headers (by
   // creation date, newest first) and/or assignee headers with an open
@@ -1270,8 +1276,9 @@ export default function AdminDashboard() {
                     <div>
                       <CardTitle className="text-base">Bounties</CardTitle>
                       <CardDescription>
-                        {filteredBounties.length} of{" "}
-                        {chainFilteredBounties.length} on{" "}
+                        {listLoading
+                          ? "Loading…"
+                          : `${filteredBounties.length} of ${chainFilteredBounties.length} on `}{" "}
                         {chainFilter === "MAIN" ? "mainnet" : "testnet"}
                       </CardDescription>
                     </div>
@@ -1364,7 +1371,12 @@ export default function AdminDashboard() {
                   {/* Mobile: stacked cards (below sm)                */}
                   {/* ============================================== */}
                   <div className="sm:hidden divide-y divide-border">
-                    {bountyRows.length === 0 ? (
+                    {listLoading ? (
+                      <div className="flex items-center justify-center gap-2 px-4 py-16 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" /> Loading
+                        bounties…
+                      </div>
+                    ) : bountyRows.length === 0 ? (
                       <div className="flex flex-col items-center px-4 py-16 text-center">
                         <FileText className="mb-3 h-9 w-9 text-muted-foreground/40" />
                         <p className="text-sm text-muted-foreground">
@@ -1627,7 +1639,16 @@ export default function AdminDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {bountyRows.length === 0 ? (
+                        {listLoading ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="py-16">
+                              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />{" "}
+                                Loading bounties…
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ) : bountyRows.length === 0 ? (
                           <TableRow>
                             <TableCell colSpan={7} className="py-16">
                               <div className="flex flex-col items-center text-center">
