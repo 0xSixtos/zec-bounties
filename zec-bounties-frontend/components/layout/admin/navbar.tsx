@@ -580,9 +580,9 @@ export function AdminNavbar({
               className="transition-colors hover:text-primary"
             >
               <img
-                src="ZecHubBlue.png"
+                src="/ZecHubBlue.png"
                 alt="ZecHub"
-                className="h-8 sam:h-10 md:h-12"
+                className="h-8 sm:h-10 md:h-12 object-contain"
               />
             </Link>
             <Link
