@@ -33,6 +33,15 @@ function loadRoutes() {
       user: { findFirst: async () => ({ id: "u1", githubId: "1", role: "HUNTER" }) },
     },
     "../middleware/auth": { signSessionToken: () => "session-token" },
+    "../helpers/githubLogin": {
+      verifiedPrimaryEmail: (emails) => {
+        if (!Array.isArray(emails)) return null;
+        const primary = emails.find((e) => e?.primary && e.verified);
+        return typeof primary?.email === "string" ? primary.email : null;
+      },
+      isOtherGithubAccount: (user, githubId) =>
+        Boolean(user?.githubId) && user.githubId !== githubId,
+    },
   };
   const filename = path.join(__dirname, "../routes/auth.js");
   const module = { exports: {} };
