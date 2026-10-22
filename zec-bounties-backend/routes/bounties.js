@@ -46,6 +46,8 @@ const {
   sendMailIfEnabled,
   sendPushToOptedIn,
   getBroadcastRecipients,
+  getSubmissionRecipients,
+  withoutSubmissionBodies,
   broadcastBountyEvent,
   invalidateBounty,
   ONBOARDED_ROLES,
@@ -1507,10 +1509,11 @@ router.post("/:id/submit", authenticate, async (req, res) => {
       workSubmission,
       bountyId,
       userId,
+      await getSubmissionRecipients(bountyId, userId),
     );
     await broadcastBountyEvent(
       "bounty_updated",
-      updatedBounty,
+      withoutSubmissionBodies(updatedBounty),
       bountyId,
       userId,
     );
@@ -1809,10 +1812,14 @@ router.patch(
         updatedSubmission,
         updatedBounty.id,
         req.user.id,
+        await getSubmissionRecipients(
+          updatedBounty.id,
+          updatedSubmission.submittedBy,
+        ),
       );
       await broadcastBountyEvent(
         "bounty_updated",
-        updatedBounty,
+        withoutSubmissionBodies(updatedBounty),
         updatedBounty.id,
         req.user.id,
       );
@@ -1947,11 +1954,12 @@ router.patch("/submissions/:submissionId", authenticate, async (req, res) => {
       updated,
       submission.bountyId,
       userId,
+      await getSubmissionRecipients(submission.bountyId, userId),
     );
     if (updatedBounty)
       await broadcastBountyEvent(
         "bounty_updated",
-        updatedBounty,
+        withoutSubmissionBodies(updatedBounty),
         submission.bountyId,
         userId,
       );
