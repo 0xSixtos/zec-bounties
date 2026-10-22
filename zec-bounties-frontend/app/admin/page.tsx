@@ -532,7 +532,9 @@ export default function AdminDashboard() {
     const timer = setTimeout(async () => {
       await fetchBounties(
         true,
-        serverUser ? { user: serverUser } : { user: "" },
+        serverUser
+          ? { user: serverUser, teamless: true }
+          : { user: "", teamless: true },
       );
       if (cancelled || !serverUser) return;
       await loadAllBounties();
@@ -543,6 +545,13 @@ export default function AdminDashboard() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverUser]);
+
+  useEffect(() => {
+    return () => {
+      fetchBounties(true, { teamless: false, user: "" });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const q = searchQuery.trim();
