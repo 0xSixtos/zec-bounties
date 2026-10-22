@@ -2657,6 +2657,7 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
 
           case "bounties_exported":
             fetchTotalStats();
+            fetchMyBounties();
             break;
 
           case "bounty_assignees_updated":

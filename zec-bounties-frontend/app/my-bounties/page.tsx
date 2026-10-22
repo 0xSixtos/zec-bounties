@@ -105,7 +105,9 @@ export default function MyBountiesPage() {
     const uid = currentUser?.id;
     if (!uid) return [];
     return userBounties.filter((b) => {
-      if (b.status !== "DONE" || b.chain !== "MAIN" || !b.isPaid) return false;
+      if (b.status !== "DONE" || b.chain !== "MAIN") return false;
+      // Paid on-platform, or exported for an off-platform payout
+      if (!b.isPaid && !b.exportedAt) return false;
       if (b.assignee === uid) return true;
       if (b.assignees?.some((a) => a.userId === uid)) return true;
       return false;
