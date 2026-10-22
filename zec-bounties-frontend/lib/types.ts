@@ -153,6 +153,8 @@ export interface Bounty {
   status: BountyStatus;
   isApproved: boolean;
   isPaid: boolean;
+  exportedAt?: string | null;
+  exportedBy?: string | null;
   isPrivate: boolean;
   suggestionReviewStatus?: "PENDING" | "APPROVED" | "DECLINED" | null;
   suggestionReviewReason?: string | null;
