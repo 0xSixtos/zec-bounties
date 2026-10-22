@@ -184,12 +184,7 @@ interface BountyContextType {
   verifyUaddress: (z_address: string) => Promise<boolean | undefined>;
   fetchBounties: (
     reset?: boolean,
-    opts?: {
-      chain?: "MAIN" | "TEST" | "ALL";
-      teamId?: string;
-      user?: string;
-      teamless?: boolean;
-    },
+    opts?: { chain?: "MAIN" | "TEST" | "ALL"; teamId?: string; user?: string },
   ) => Promise<void>;
   loadMoreBounties: () => Promise<void>;
   loadAllBounties: () => Promise<boolean>;
@@ -2938,7 +2933,6 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
   // private bounties back via the visibility filter. Never use
   // getPublicHeaders() here.
   const listUserRef = useRef("");
-  const listTeamlessRef = useRef(false);
 
   const fetchBounties = async (
     reset = true,
@@ -2946,9 +2940,6 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
   ) => {
     if (opts && "user" in opts) {
       listUserRef.current = String(opts.user || "").trim();
-    }
-    if (opts && "teamless" in opts) {
-      listTeamlessRef.current = !!opts.teamless;
     }
     const requestId = ++fetchBountiesReqId.current;
     const updatesAtStart = new Map(bountyUpdates.current);
@@ -3034,7 +3025,6 @@ export function BountyProvider({ children }: { children: React.ReactNode }) {
           chain: resolvedChain,
         });
         if (listUserRef.current) params.set("user", listUserRef.current);
-        if (listTeamlessRef.current) params.set("teamless", "true");
         const res = await fetch(`${backendUrl}/api/bounties?${params}`, {
           headers: getAuthHeaders(),
         });
