@@ -2067,6 +2067,17 @@ router.patch(
       await invalidateSubmissions(keptSubmission.bountyId);
       await invalidateBounty(keptSubmission.bountyId);
 
+      // Same REST audience as a submission body, plus the people who were
+      // rejected so they learn they lost. Not every viewer of a public bounty.
+      const rejectAudience = [
+        ...new Set([
+          ...(await getSubmissionRecipients(
+            keptSubmission.bountyId,
+            keptSubmission.submittedBy,
+          )),
+          ...rejectedUserIds,
+        ]),
+      ];
       await broadcastBountyEvent(
         "submissions_rejected_others",
         {
@@ -2077,6 +2088,7 @@ router.patch(
         },
         keptSubmission.bountyId,
         req.user.id,
+        rejectAudience,
       );
       await broadcastBountyEvent(
         "bounty_assignees_updated",
