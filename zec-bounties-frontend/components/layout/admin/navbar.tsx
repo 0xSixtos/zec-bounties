@@ -70,7 +70,7 @@ import { cn } from "@/lib/utils";
 import { ThemePicker } from "@/components/theme/theme-picker";
 
 // ── Small visual divider between navbar groups ──────────────────────────────
-function NavDivider() {
+export function NavDivider() {
   return <div className="hidden xl:block h-6 w-px bg-border mx-1 shrink-0" />;
 }
 
@@ -80,7 +80,7 @@ function NavDivider() {
 // active wallet is a Team or Personal wallet. It never hides. The user always
 // knows what context they are operating in.
 //
-function ActiveWalletTypePill() {
+export function ActiveWalletTypePill() {
   const { zcashParams, currentTeam } = useBounty();
   if (!zcashParams || zcashParams.length === 0) return null;
   const active =
@@ -125,7 +125,7 @@ function ActiveWalletTypePill() {
 }
 
 // ── Compact sync status line (used inside the sync dropdown & mobile sheet) ─
-function SyncStatusSummary({ status }: { status: SyncStatus | null }) {
+export function SyncStatusSummary({ status }: { status: SyncStatus | null }) {
   if (!status) {
     return <p className="text-muted-foreground">No sync data yet.</p>;
   }
@@ -163,7 +163,7 @@ function SyncStatusSummary({ status }: { status: SyncStatus | null }) {
 // it gets a simple dropdown: a constant-size icon trigger with a status dot,
 // and the percentage/blocks detail inside a popover instead of an inline
 // badge that used to grow and squeeze neighbouring controls.
-function SyncStatusMenu({
+export function SyncStatusMenu({
   syncStatus,
   syncStatusError,
   isSyncing,
@@ -256,7 +256,7 @@ function SyncStatusMenu({
 // chain, so it's kept entirely separate from the read-only sync check, and
 // requires an explicit confirmation before running. Its own result is shown
 // in a tooltip, never mixed with sync data.
-function RescanButton({
+export function RescanButton({
   rescanStatus,
   rescanLoading,
   rescanHidden,
@@ -458,6 +458,128 @@ function RoleToggleButton({ compact = false }: { compact?: boolean }) {
   );
 }
 
+export const confirmedTotal = (b: Balance | undefined | null) =>
+  ((b?.confirmed_ironwood_balance ?? 0) +
+    (b?.confirmed_orchard_balance ?? 0) +
+    (b?.confirmed_sapling_balance ?? 0) +
+    (b?.confirmed_transparent_balance ?? 0)) /
+  1e8;
+export const fmt = (n: number) => n.toFixed(4);
+
+// NOTE: 0.5 * 60 * 1000 is 30s, but the old comment said 5 minutes. Confirm which you want.
+const RESCAN_HIDE_MS = 0.5 * 60 * 1000;
+
+export function useRescanCooldown(storageKey = "walletImportedAt") {
+  const read = () => {
+    try {
+      const ts = localStorage.getItem(storageKey);
+      return !!ts && Date.now() - Number(ts) < RESCAN_HIDE_MS;
+    } catch {
+      return false;
+    }
+  };
+  const [hidden, setHidden] = useState(read);
+  useEffect(() => {
+    setHidden(read());
+    try {
+      const ts = localStorage.getItem(storageKey);
+      if (!ts) return;
+      const remaining = RESCAN_HIDE_MS - (Date.now() - Number(ts));
+      if (remaining <= 0) return;
+      const t = setTimeout(() => setHidden(false), remaining);
+      return () => clearTimeout(t);
+    } catch {}
+  }, [storageKey]);
+  return hidden;
+}
+
+export function WalletBalanceGroup({
+  balance,
+  isRefreshing,
+  onOpen,
+  onRefresh,
+}: {
+  balance: Balance | undefined | null;
+  isRefreshing: boolean;
+  onOpen: () => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-0.5 pl-1 pr-0.5 py-0.5 rounded-lg border bg-muted/30">
+      <ActiveWalletTypePill />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            className="gap-2 h-8 text-xs font-mono"
+            onClick={onOpen}
+          >
+            <Wallet className="h-4 w-4" />
+            {balance ? `${fmt(confirmedTotal(balance))} ZEC` : `0.0000 ZEC`}
+          </Button>
+        </TooltipTrigger>
+        {balance && (
+          <TooltipContent
+            side="bottom"
+            className="text-xs space-y-1.5 min-w-[180px]"
+          >
+            <p className="font-semibold text-foreground mb-1">
+              Confirmed balances
+            </p>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Ironwood</span>
+              <span className="font-mono">
+                {fmt(
+                  (balance.confirmed_ironwood_balance ??
+                    balance.confirmed_orchard_balance ??
+                    0) / 1e8,
+                )}{" "}
+                ZEC
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Sapling</span>
+              <span className="font-mono">
+                {fmt(balance.confirmed_sapling_balance / 1e8)} ZEC
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-muted-foreground">Transparent</span>
+              <span className="font-mono">
+                {fmt(balance.confirmed_transparent_balance / 1e8)} ZEC
+              </span>
+            </div>
+            <div className="border-t pt-1 flex justify-between gap-4 font-semibold">
+              <span>Total</span>
+              <span className="font-mono">
+                {fmt(confirmedTotal(balance))} ZEC
+              </span>
+            </div>
+          </TooltipContent>
+        )}
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            className="h-8 w-8"
+          >
+            <RefreshCw
+              className={cn("w-4 h-4", isRefreshing && "animate-spin")}
+            />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs">
+          Refresh balance
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 // ── Main navbar ────────────────────────────────────────────────────────────
 export function AdminNavbar({
   isAdmin = true,
@@ -476,30 +598,7 @@ export function AdminNavbar({
   const [mobileRescanConfirmOpen, setMobileRescanConfirmOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const RESCAN_HIDE_MS = 0.5 * 60 * 1000; // 5 minutes
-  const [rescanHidden, setRescanHidden] = useState(() => {
-    try {
-      const ts = localStorage.getItem("walletImportedAt");
-      return !!ts && Date.now() - Number(ts) < RESCAN_HIDE_MS;
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      const ts = localStorage.getItem("walletImportedAt");
-      if (!ts) return;
-      const remaining = RESCAN_HIDE_MS - (Date.now() - Number(ts));
-      if (remaining <= 0) {
-        setRescanHidden(false);
-        return;
-      }
-      const timer = setTimeout(() => setRescanHidden(false), remaining);
-      return () => clearTimeout(timer);
-    } catch {
-      setRescanHidden(false);
-    }
-  }, []);
+  const rescanHidden = useRescanCooldown();
 
   const {
     currentUser,
@@ -532,16 +631,6 @@ export function AdminNavbar({
       ? zcashParams[zcashParams.length - 1]
       : null);
   const activeIsTeam = !!(activeWallet?.isTeam && activeWallet?.teamId);
-  const confirmedTotal = (b: Balance | undefined) => {
-    return (
-      ((b?.confirmed_ironwood_balance ?? 0) +
-        (b?.confirmed_orchard_balance ?? 0) +
-        (b?.confirmed_sapling_balance ?? 0) +
-        (b?.confirmed_transparent_balance ?? 0)) /
-      1e8
-    );
-  };
-  const fmt = (n: number) => n.toFixed(4);
   const handleRefresh = async () => {
     setIsRefreshing(true);
     try {
@@ -642,32 +731,36 @@ export function AdminNavbar({
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
 
             <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  href="/admin/dashboard"
-                  prefetch
-                  aria-label="Admin dashboard"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-amber-500 transition-colors hover:bg-amber-500/10 hover:text-amber-400"
-                >
-                  <LayoutDashboard className="h-4 w-4" />
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">Dashboard</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  href="/admin/kpis"
-                  prefetch
-                  aria-label="KPIs"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sky-400 transition-colors hover:bg-sky-500/10 hover:text-sky-300"
-                >
-                  <BarChart3 className="h-4 w-4" />
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">KPIs</TooltipContent>
-            </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    href="/admin/dashboard"
+                    prefetch
+                    aria-label="Admin dashboard"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-amber-500 transition-colors hover:bg-amber-500/10 hover:text-amber-400"
+                  >
+                    <LayoutDashboard className="h-4 w-4" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  Dashboard
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    href="/admin/kpis"
+                    prefetch
+                    aria-label="KPIs"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sky-400 transition-colors hover:bg-sky-500/10 hover:text-sky-300"
+                  >
+                    <BarChart3 className="h-4 w-4" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  KPIs
+                </TooltipContent>
+              </Tooltip>
             </TooltipProvider>
           </div>
 
@@ -691,86 +784,12 @@ export function AdminNavbar({
             <TooltipProvider delayDuration={300}>
               <NavDivider />
 
-              {/* Wallet group: context pill + balance, visually contained */}
-              <div className="flex items-center gap-0.5 pl-1 pr-0.5 py-0.5 rounded-lg border bg-muted/30">
-                <ActiveWalletTypePill />
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      className="gap-2 h-8 text-xs font-mono"
-                      onClick={handleWalletClick}
-                    >
-                      <Wallet className="h-4 w-4" />
-                      {balance
-                        ? `${fmt(confirmedTotal(balance))} ZEC`
-                        : `0.0000 ZEC`}
-                    </Button>
-                  </TooltipTrigger>
-                  {balance && (
-                    <TooltipContent
-                      side="bottom"
-                      className="text-xs space-y-1.5 min-w-[180px]"
-                    >
-                      <p className="font-semibold text-foreground mb-1">
-                        Confirmed balances
-                      </p>
-                      <div className="flex justify-between gap-4">
-                        <span className="text-muted-foreground">Ironwood</span>
-                        <span className="font-mono">
-                          {fmt(
-                            (balance.confirmed_ironwood_balance ??
-                              balance.confirmed_orchard_balance ??
-                              0) / 1e8,
-                          )}{" "}
-                          ZEC
-                        </span>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <span className="text-muted-foreground">Sapling</span>
-                        <span className="font-mono">
-                          {fmt(balance.confirmed_sapling_balance / 1e8)} ZEC
-                        </span>
-                      </div>
-                      <div className="flex justify-between gap-4">
-                        <span className="text-muted-foreground">
-                          Transparent
-                        </span>
-                        <span className="font-mono">
-                          {fmt(balance.confirmed_transparent_balance / 1e8)} ZEC
-                        </span>
-                      </div>
-                      <div className="border-t pt-1 flex justify-between gap-4 font-semibold">
-                        <span>Total</span>
-                        <span className="font-mono">
-                          {fmt(confirmedTotal(balance))} ZEC
-                        </span>
-                      </div>
-                    </TooltipContent>
-                  )}
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={handleRefresh}
-                      disabled={isRefreshing}
-                      className="h-8 w-8"
-                    >
-                      <RefreshCw
-                        className={cn(
-                          "w-4 h-4",
-                          isRefreshing && "animate-spin",
-                        )}
-                      />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom" className="text-xs">
-                    Refresh balance
-                  </TooltipContent>
-                </Tooltip>
-              </div>
+              <WalletBalanceGroup
+                balance={balance}
+                isRefreshing={isRefreshing}
+                onOpen={handleWalletClick}
+                onRefresh={handleRefresh}
+              />
 
               <NavDivider />
 
