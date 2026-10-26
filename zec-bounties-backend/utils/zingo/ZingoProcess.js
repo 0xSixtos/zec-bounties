@@ -6,6 +6,32 @@ const {
   quicksendLine,
 } = require("./replCommand");
 
+// ---------------------------------------------------------------------------
+// Logging
+// Set ZINGO_DEBUG=0 to silence. ZINGO_LOG_MAX controls truncation (chars).
+// ---------------------------------------------------------------------------
+const DEBUG = process.env.ZINGO_DEBUG !== "0";
+const LOG_MAX = Number(process.env.ZINGO_LOG_MAX) || 20000;
+const ANSI = /\u001b\[[0-9;]*m/g;
+
+function preview(value, max = LOG_MAX) {
+  let s;
+  try {
+    s = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  } catch {
+    s = String(value);
+  }
+  s = String(s).replace(ANSI, "");
+  return s.length > max ? `${s.slice(0, max)}…(+${s.length - max} chars)` : s;
+}
+
+function log(tag, message, data) {
+  if (!DEBUG) return;
+  const head = `[${new Date().toISOString()}] [ZINGO:${tag}] ${message}`;
+  if (data === undefined) console.log(head);
+  else console.log(`${head}\n${preview(data)}`);
+}
+
 function extractJson(text) {
   let start = text.indexOf("{");
   if (start === -1) return null;
@@ -21,14 +47,11 @@ function extractJson(text) {
     }
   }
 
-  return null; // incomplete JSON
+  return null;
 }
 
-// All complete top-level {...} blocks in the text, nesting-safe and
-// string-aware. A non-greedy regex stops at the first "}", which shears
-// nested objects (zingo-cli 6 nests "transmissions" inside the send result);
-// a plain brace counter would also miscount on a brace inside a JSON string
-// (a bounty title rides into the memo), so skip anything between quotes.
+// Extract complete top-level JSON blocks while respecting nested objects
+// and braces inside JSON strings.
 function extractJsonBlocks(text) {
   const blocks = [];
   let depth = 0;
@@ -215,18 +238,18 @@ class ZingoProcess {
       params.dataDir || "/mnt/d/zaino/zebra/.cache/zaino",
     ];
 
+    log("constructor", `spawning ${this.zingoPath}`, args.join(" "));
+
     this.proc = spawn(this.zingoPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
+    log("constructor", `spawned pid=${this.proc.pid}`);
+
     this.buffer = "";
     this.waiters = [];
 
-    // Commands run one at a time through this chain. The process is shared
-    // per (chain, server, dataDir) and every command reads whatever stdout
-    // arrives after it writes, so overlapping commands read each other's
-    // output — a send could settle on a `sync status` block and report a
-    // payout that never happened.
+    // Run commands sequentially so their output cannot be mixed up.
     this.queue = Promise.resolve();
 
     // Set when a command gave up (timeout, stderr, bad parse) while its
@@ -236,8 +259,13 @@ class ZingoProcess {
     this.tainted = false;
     this.exited = false;
 
+    this.proc.on("error", (err) => {
+      log("process", `spawn/process error: ${err.message}`);
+    });
+
     this.proc.stdout.on("data", (data) => {
       const text = data.toString();
+      log("stdout", "raw chunk", text);
       this.buffer += text;
 
       // Resolve any pending command waiting for output
@@ -245,11 +273,31 @@ class ZingoProcess {
     });
 
     this.proc.stderr.on("data", (data) => {
-      console.error("ZINGO STDERR:", data.toString());
+      log("stderr:raw", "raw chunk", data.toString());
+
+      const message = data.toString().replace(/\u001b\[[0-9;]*m/g, "");
+
+      const meaningful = message
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter(
+          (line) =>
+            !/^Server-Selection Sweep:/i.test(line) &&
+            !/^Launching (?:sync|save) task\.\.\.$/i.test(line) &&
+            !/^balance failed:\s*undefined$/i.test(line),
+        );
+
+      // Zingo sends normal startup and sync progress through stderr.
+      // Do not log known progress messages as errors.
+      if (meaningful.length) {
+        console.error("ZINGO STDERR:", meaningful.join("\n"));
+      }
     });
 
-    this.proc.on("exit", (code) => {
+    this.proc.on("exit", (code, signal) => {
       this.exited = true;
+      log("process", `exit code=${code} signal=${signal}`);
       console.error("Zingo exited with code", code);
     });
 
@@ -261,19 +309,45 @@ class ZingoProcess {
   }
 
   // Runs `command` after every earlier command on this process has settled.
-  exclusive(command) {
-    const run = this.queue.then(() => {
+  exclusive(command, name = "command") {
+    const queuedAt = Date.now();
+    log("queue", `${name}: queued`);
+
+    const run = this.queue.then(async () => {
       if (this.exited || this.proc.killed) {
+        log("queue", `${name}: refused, process has exited`);
         throw new Error("zingo process has exited");
       }
-      return command();
+
+      const startedAt = Date.now();
+      log("queue", `${name}: started (waited ${startedAt - queuedAt}ms)`);
+
+      try {
+        const result = await command();
+        log(
+          "queue",
+          `${name}: finished in ${Date.now() - startedAt}ms`,
+          result,
+        );
+        return result;
+      } catch (err) {
+        log(
+          "queue",
+          `${name}: FAILED in ${Date.now() - startedAt}ms`,
+          err.message,
+        );
+        throw err;
+      }
     });
+
     this.queue = run.then(
       () => undefined,
       () => {
         this.tainted = true;
+        log("queue", `${name}: process marked tainted`);
       },
     );
+
     return run;
   }
 
@@ -281,6 +355,8 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       let buffer = "";
       let timer;
+
+      log("quit", `sending "${command}" (timeout ${timeout}ms)`);
 
       const cleanup = () => {
         clearTimeout(timer);
@@ -301,6 +377,7 @@ class ZingoProcess {
         cleanup();
 
         console.log("Zingo exited with code", code);
+        log("quit", `closed with code ${code}`, buffer);
 
         if (code === 0) {
           resolve({
@@ -314,6 +391,7 @@ class ZingoProcess {
 
       timer = setTimeout(() => {
         cleanup();
+        log("quit", "TIMEOUT, output so far:", buffer);
         reject(new Error("Quit command timeout"));
       }, timeout);
 
@@ -330,6 +408,8 @@ class ZingoProcess {
       let buffer = "";
       let resolved = false;
 
+      log("rescan", `sending "${command}" (timeout ${timeout}ms)`);
+
       const onData = (chunk) => {
         buffer += chunk.toString();
         const clean = buffer.replace(/\u001b\[[0-9;]*m/g, "");
@@ -337,8 +417,10 @@ class ZingoProcess {
         // Check if "Launching rescan..." appeared
         if (clean.includes("Launching rescan...") && !resolved) {
           resolved = true;
-          // Wait 3s to let it print final status messages
+          log("rescan", "saw 'Launching rescan...', resolving in 3s");
+
           setTimeout(() => {
+            log("rescan", "resolved", clean);
             resolve({ message: "Rescan launched", output: clean });
           }, 3000);
         }
@@ -346,6 +428,7 @@ class ZingoProcess {
 
       const onError = (err) => {
         cleanup();
+        log("rescan", "stderr rejection", err.toString());
         reject(err);
       };
 
@@ -357,6 +440,7 @@ class ZingoProcess {
 
       const timer = setTimeout(() => {
         cleanup();
+        log("rescan", "TIMEOUT, output so far:", buffer);
         reject(new Error("Rescan command timeout"));
       }, timeout);
 
@@ -371,6 +455,7 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       const startBufferLen = this.buffer.length;
 
+      log("sync", `sending "${command}" (timeout ${timeout}ms)`);
       this.proc.stdin.write(assertFixedCommand(command) + "\n");
 
       const check = () => {
@@ -380,14 +465,20 @@ class ZingoProcess {
         const clean = chunk.replace(/\u001b\[[0-9;]*m/g, "");
 
         const jsonText = extractJson(clean);
+
         if (jsonText) {
           try {
-            resolve(JSON.parse(jsonText));
+            const parsed = JSON.parse(jsonText);
+            log("sync", "resolved", parsed);
+            resolve(parsed);
           } catch (e) {
+            log("sync", `JSON parse failed: ${e.message}`, jsonText);
             reject(e);
           }
+
           return true;
         }
+
         return false;
       };
 
@@ -400,6 +491,11 @@ class ZingoProcess {
 
       const timer = setTimeout(() => {
         clearInterval(interval);
+        log(
+          "sync",
+          "TIMEOUT, output so far:",
+          this.buffer.slice(startBufferLen),
+        );
         reject(new Error("Zingo command timeout"));
       }, timeout);
 
@@ -416,6 +512,7 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       const startBufferLen = this.buffer.length;
 
+      log("addresses", `sending "${command}" (timeout ${timeout}ms)`);
       this.proc.stdin.write(assertFixedCommand(command) + "\n");
 
       const check = () => {
@@ -425,14 +522,20 @@ class ZingoProcess {
         const clean = chunk.replace(/\u001b\[[0-9;]*m/g, "");
 
         const jsonText = extractJsonAddress(clean);
+
         if (jsonText) {
           try {
-            resolve(JSON.parse(jsonText));
+            const parsed = JSON.parse(jsonText);
+            log("addresses", "resolved", parsed);
+            resolve(parsed);
           } catch (e) {
+            log("addresses", `JSON parse failed: ${e.message}`, jsonText);
             reject(e);
           }
+
           return true;
         }
+
         return false;
       };
 
@@ -445,6 +548,11 @@ class ZingoProcess {
 
       const timer = setTimeout(() => {
         clearInterval(interval);
+        log(
+          "addresses",
+          "TIMEOUT, output so far:",
+          this.buffer.slice(startBufferLen),
+        );
         reject(new Error("Zingo command timeout"));
       }, timeout);
 
@@ -461,35 +569,58 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       let buffer = "";
 
+      log("balance", `sending "${command}" (timeout ${timeout}ms)`);
+
       const onData = (chunk) => {
         buffer += chunk.toString();
+
         const clean = buffer.replace(/\u001b\[[0-9;]*m/g, "");
         const jsonText = parseZingoBalance(clean);
 
         if (jsonText && jsonText !== "{}") {
           cleanup();
-          resolve(JSON.parse(jsonText));
+          const parsed = JSON.parse(jsonText);
+          log("balance", "resolved", parsed);
+          resolve(parsed);
         }
       };
 
-      const onError = (err) => {
-        cleanup();
-        reject(err);
+      // Stderr is not a reliable failure signal for Zingo. Normal server
+      // selection, sync and save progress is written there even when balance
+      // succeeds. Do not reject with a Buffer; let stdout determine success.
+      const onStderr = (chunk) => {
+        const clean = chunk.toString().replace(/\u001b\[[0-9;]*m/g, "");
+
+        const meaningful = clean
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .filter(
+            (line) =>
+              !/^Server-Selection Sweep:/i.test(line) &&
+              !/^Launching (?:sync|save) task\.\.\.$/i.test(line) &&
+              !/^balance failed:\s*undefined$/i.test(line),
+          );
+
+        if (meaningful.length) {
+          console.error("ZINGO balance stderr:", meaningful.join("\n"));
+        }
       };
 
       const cleanup = () => {
         clearTimeout(timer);
         this.proc.stdout.off("data", onData);
-        this.proc.stderr.off("data", onError);
+        this.proc.stderr.off("data", onStderr);
       };
 
       const timer = setTimeout(() => {
         cleanup();
+        log("balance", "TIMEOUT, output so far:", buffer);
         reject(new Error("Zingo command timeout"));
       }, timeout);
 
       this.proc.stdout.on("data", onData);
-      this.proc.stderr.on("data", onError);
+      this.proc.stderr.on("data", onStderr);
 
       this.proc.stdin.write(assertFixedCommand(command) + "\n");
     });
@@ -498,18 +629,23 @@ class ZingoProcess {
   parseAddress(zaddress, timeout = 30000) {
     return new Promise((resolve, reject) => {
       if (!zaddress) {
+        log("parseAddress", "rejected: no zaddress provided");
         reject(new Error("No zaddress provided"));
         return;
       }
+
       let command;
+
       try {
         command = parseAddressLine(zaddress);
       } catch (err) {
+        log("parseAddress", `rejected: ${err.message}`);
         reject(err);
         return;
       }
 
       const startBufferLen = this.buffer.length;
+      log("parseAddress", `sending "${command}" (timeout ${timeout}ms)`);
       this.proc.stdin.write(command + "\n");
 
       const check = () => {
@@ -517,14 +653,20 @@ class ZingoProcess {
         const clean = chunk.replace(/\u001b\[[0-9;]*m/g, "");
 
         const jsonText = extractJsonAddress(clean);
+
         if (jsonText) {
           try {
-            resolve(JSON.parse(jsonText));
+            const parsed = JSON.parse(jsonText);
+            log("parseAddress", "resolved", parsed);
+            resolve(parsed);
           } catch (e) {
+            log("parseAddress", `JSON parse failed: ${e.message}`, jsonText);
             reject(e);
           }
+
           return true;
         }
+
         return false;
       };
 
@@ -537,6 +679,11 @@ class ZingoProcess {
 
       const timer = setTimeout(() => {
         clearInterval(interval);
+        log(
+          "parseAddress",
+          "TIMEOUT, output so far:",
+          this.buffer.slice(startBufferLen),
+        );
         reject(new Error("Zingo parse_address timeout"));
       }, timeout);
 
@@ -549,20 +696,22 @@ class ZingoProcess {
     });
   }
 
-  // Resolves with { txids, error, timedOut, raw, stderr }. Rejects only
-  // before the command is written — nothing was sent, so the caller can
-  // release the bounties. Once written, the send may be on the network and
-  // every exit path hands back something the caller can persist:
-  //   txids non-empty -> sent
-  //   error           -> zingo reported a failure, nothing sent
-  //   neither         -> outcome unknown (timedOut says why), NOT "did not happen"
+  // Resolves with { txids, error, timedOut, raw, stderr }.
   async quicksend(recipients, timeout = 180000) {
+    log(
+      "quicksend",
+      `called with ${recipients.length} recipient(s)`,
+      recipients,
+    );
+
     // An address rides inside the single-quoted REPL command and mutating
     // one would redirect funds, so reject, never sanitize.
     const sanitizedRecipients = recipients.map((r) => {
       if (!/^[a-z0-9]+$/i.test(String(r.address))) {
+        log("quicksend", `refusing malformed address: ${String(r.address)}`);
         throw new Error("Refusing to send to malformed address");
       }
+
       return {
         address: r.address,
         amount: Math.ceil(Number(r.amount)),
@@ -588,7 +737,9 @@ class ZingoProcess {
 
         const settle = (outcome) => {
           cleanup();
-          resolve({ raw: stdoutBuf, stderr: stderrBuf, ...outcome });
+          const result = { raw: stdoutBuf, stderr: stderrBuf, ...outcome };
+          log("quicksend", "settled", result);
+          resolve(result);
         };
 
         const onData = (chunk) => {
@@ -601,13 +752,18 @@ class ZingoProcess {
           // A txids block wins wherever it sits: wrongly reporting a failure
           // releases the bounties for a second payment.
           let failure = null;
+
           for (const block of extractJsonBlocks(clean)) {
             let parsed;
+
             try {
               parsed = JSON.parse(block);
             } catch {
+              log("quicksend", "skipping unparseable JSON block", block);
               continue;
             }
+
+            log("quicksend", "parsed JSON block", parsed);
 
             if (Array.isArray(parsed.txids) && parsed.txids.length > 0) {
               return settle({
@@ -616,6 +772,7 @@ class ZingoProcess {
                 timedOut: false,
               });
             }
+
             if (parsed.error != null && failure === null) {
               failure =
                 typeof parsed.error === "string"
@@ -629,9 +786,8 @@ class ZingoProcess {
           }
         };
 
-        // zingo writes progress to stderr while a send is in flight (the
-        // ironwood transmit heartbeat); keep it for diagnostics instead of
-        // failing a send that is going through.
+        // Zingo may write progress to stderr while a send is in flight.
+        // Keep it for diagnostics rather than failing a send automatically.
         const onStderr = (chunk) => {
           stderrBuf += chunk.toString();
         };
@@ -641,6 +797,7 @@ class ZingoProcess {
           // the next command's window. Kill the process; getZingo spawns a
           // clean one, and a send that did go out shows up in wallet history
           // for POST /records/:id/resolve.
+          log("quicksend", `TIMEOUT after ${timeout}ms, killing process`);
           settle({ txids: [], error: null, timedOut: true });
           this.destroy();
         }, timeout);
@@ -648,23 +805,27 @@ class ZingoProcess {
         this.proc.stdout.on("data", onData);
         this.proc.stderr.on("data", onStderr);
 
+        log("quicksend", "sending command", command);
         this.proc.stdin.write(command + "\n");
       });
 
     return this.exclusive(() => {
       if (this.tainted) {
+        log("quicksend", "refused: process is tainted, nothing sent");
         throw new Error(
           "zingo process may still be printing an earlier command's output; nothing was sent",
         );
       }
       return run();
-    });
+    }, "quicksend");
   }
 
   transactions(timeout = 180000) {
     const command = "transactions";
     return new Promise((resolve, reject) => {
       let buffer = "";
+
+      log("transactions", `sending "${command}" (timeout ${timeout}ms)`);
 
       const onData = (chunk) => {
         buffer += chunk.toString();
@@ -675,24 +836,32 @@ class ZingoProcess {
 
         if (blocks.length > 0) {
           cleanup();
+          log("transactions", `matched ${blocks.length} raw block(s)`, blocks);
 
           const parsed = blocks
             .map((block) => {
               try {
-                return parseTransactionBlock(block); // ✅ use custom parser
+                return parseTransactionBlock(block);
               } catch (e) {
                 console.error("Parse error:", e);
+                log("transactions", `block parse error: ${e.message}`, block);
                 return null;
               }
             })
             .filter(Boolean);
 
+          log(
+            "transactions",
+            `resolved with ${parsed.length} transaction(s)`,
+            parsed,
+          );
           resolve(parsed);
         }
       };
 
       const onError = (err) => {
         cleanup();
+        log("transactions", "stderr rejection", err.toString());
         reject(err);
       };
 
@@ -704,6 +873,7 @@ class ZingoProcess {
 
       const timer = setTimeout(() => {
         cleanup();
+        log("transactions", "TIMEOUT, output so far:", buffer);
         reject(new Error("Zingo transactions timeout"));
       }, timeout);
 
@@ -718,6 +888,8 @@ class ZingoProcess {
     return new Promise((resolve, reject) => {
       let buffer = "";
 
+      log("recovery_info", `sending "${command}" (timeout ${timeout}ms)`);
+
       const onData = (chunk) => {
         buffer += chunk.toString();
 
@@ -727,12 +899,18 @@ class ZingoProcess {
 
         if (parsed) {
           cleanup();
+          // Deliberately NOT logging values: this contains the wallet seed.
+          log(
+            "recovery_info",
+            `resolved (values redacted), keys: ${Object.keys(parsed).join(", ")}`,
+          );
           resolve(parsed);
         }
       };
 
       const onError = (err) => {
         cleanup();
+        log("recovery_info", "stderr rejection", err.toString());
         reject(err);
       };
 
@@ -744,6 +922,7 @@ class ZingoProcess {
 
       const timer = setTimeout(() => {
         cleanup();
+        log("recovery_info", "TIMEOUT (output withheld, may contain seed)");
         reject(new Error("Zingo recovery_info timeout"));
       }, timeout);
 
@@ -757,6 +936,8 @@ class ZingoProcess {
   info(command = "info", timeout = 180000) {
     return new Promise((resolve, reject) => {
       let buffer = "";
+
+      log("info", `sending "${command}" (timeout ${timeout}ms)`);
 
       const cleanup = () => {
         clearTimeout(timer);
@@ -789,17 +970,20 @@ class ZingoProcess {
 
         if (parsed) {
           cleanup();
+          log("info", "resolved", parsed);
           resolve(parsed);
         }
       };
 
       const onError = (err) => {
         cleanup();
+        log("info", "stderr rejection", err.toString?.() || err);
         reject(new Error(`Zingo stderr error: ${err.toString?.() || err}`));
       };
 
       const timer = setTimeout(() => {
         cleanup();
+        log("info", "TIMEOUT, output so far:", buffer);
         reject(new Error("Zingo info timeout"));
       }, timeout);
 
@@ -811,14 +995,15 @@ class ZingoProcess {
   }
 
   destroy() {
+    log("destroy", `killing process pid=${this.proc && this.proc.pid}`);
     if (this.proc && !this.proc.killed) {
       this.proc.kill();
     }
   }
 }
 
-// The read commands go through the same queue as sends (quicksend queues
-// itself), so no two commands share an output window.
+// Route read commands through the same queue as sends so output windows
+// do not overlap.
 for (const name of [
   "quit",
   "rescan",
@@ -831,8 +1016,9 @@ for (const name of [
   "info",
 ]) {
   const command = ZingoProcess.prototype[name];
+
   ZingoProcess.prototype[name] = function (...args) {
-    return this.exclusive(() => command.apply(this, args));
+    return this.exclusive(() => command.apply(this, args), name);
   };
 }
 
