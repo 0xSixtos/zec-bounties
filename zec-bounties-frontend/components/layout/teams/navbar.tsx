@@ -57,6 +57,16 @@ import { WalletTopupModal } from "@/components/wallet-topup-modal";
 import { useBounty } from "@/lib/bounty-context";
 import { useRouter } from "next/navigation";
 import { ThemePicker } from "@/components/theme/theme-picker";
+import {
+  NavDivider,
+  WalletBalanceGroup,
+  SyncStatusMenu,
+  RescanButton,
+  SyncStatusSummary,
+  useRescanCooldown,
+  confirmedTotal,
+  fmt,
+} from "@/components/layout/admin/navbar";
 
 // ── Role toggle button ────────────────────────────────────────────────────────
 const ROLE_OPTIONS = [
@@ -256,6 +266,8 @@ export function TeamNavbar({
     logout,
     currentTeam,
     fetchTeamWalletBalance,
+    teamBalances,
+    teamRescanStatus,
     fetchTeamWalletAddresses,
     teamSyncStatus,
     teamSyncStatusError,
@@ -263,7 +275,12 @@ export function TeamNavbar({
     rescanTeamWallet,
     teamRescanLoading,
   } = useBounty();
-  const [teamBalance, setTeamBalance] = useState<any>(null);
+  const teamBalance = currentTeam
+    ? (teamBalances[currentTeam.id] ?? null)
+    : null;
+  const rescanHidden = useRescanCooldown(
+    currentTeam ? `walletImportedAt:${currentTeam.id}` : undefined,
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [teamAddresses, setTeamAddresses] = useState<string[]>([]);
@@ -272,23 +289,15 @@ export function TeamNavbar({
   // previously this stayed at 0.0000 ZEC until someone clicked Refresh.
   useEffect(() => {
     if (!currentTeam?.wallet) return;
-    fetchTeamWalletBalance(currentTeam.id).then(setTeamBalance);
+    fetchTeamWalletBalance(currentTeam.id);
   }, [currentTeam?.id, currentTeam?.wallet]);
-
-  const confirmedTotal = (b: Balance | undefined) =>
-    ((b?.confirmed_ironwood_balance ?? 0) +
-      (b?.confirmed_orchard_balance ?? 0) +
-      (b?.confirmed_sapling_balance ?? 0) +
-      (b?.confirmed_transparent_balance ?? 0)) /
-    1e8;
-  const fmt = (n: number) => n.toFixed(4);
 
   const handleRefresh = async () => {
     if (!currentTeam) return;
     setIsRefreshing(true);
     try {
       const bal = await fetchTeamWalletBalance(currentTeam.id);
-      setTeamBalance(bal);
+      await fetchTeamWalletBalance(currentTeam.id);
     } finally {
       setIsRefreshing(false);
     }
@@ -381,74 +390,29 @@ export function TeamNavbar({
             </div>
 
             {isTeam && currentUser && currentTeam?.wallet && (
-              <>
-                {(currentSyncStatus || teamSyncStatusError) && (
-                  <div className="px-1">
-                    {teamSyncStatusError ? (
-                      <div className="flex items-center gap-2 text-xs text-destructive font-mono">
-                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                        {teamSyncStatusError}
-                      </div>
-                    ) : (
-                      <SyncStatusBadge status={currentSyncStatus} />
-                    )}
-                  </div>
-                )}
-
-                <Button
-                  variant="outline"
-                  className="gap-2 justify-start font-mono"
-                  onClick={handleOpenTopup}
-                >
-                  <Wallet className="h-4 w-4" />
-                  {teamBalance
-                    ? `${fmt(confirmedTotal(teamBalance))} ZEC`
-                    : "0.0000 ZEC"}
-                </Button>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <Button
-                    variant="outline"
-                    className="gap-1.5 flex-1 text-xs"
-                    onClick={handleRefresh}
-                    disabled={isRefreshing}
-                  >
-                    <RefreshCw
-                      className={cn(
-                        "h-3.5 w-3.5",
-                        isRefreshing && "animate-spin",
-                      )}
-                    />
-                    Refresh
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="gap-1.5 flex-1 text-xs"
-                    onClick={handleSyncStatus}
-                    disabled={isSyncing}
-                  >
-                    {isSyncing ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Activity className="h-3.5 w-3.5" />
-                    )}
-                    Sync
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="gap-1.5 flex-1 text-xs"
-                    onClick={() => rescanTeamWallet(currentTeam.id)}
-                    disabled={teamRescanLoading}
-                  >
-                    {teamRescanLoading ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <FolderSync className="h-3.5 w-3.5" />
-                    )}
-                    Rescan
-                  </Button>
-                </div>
-              </>
+              <TooltipProvider delayDuration={300}>
+                <NavDivider />
+                <WalletBalanceGroup
+                  balance={teamBalance}
+                  isRefreshing={isRefreshing}
+                  onOpen={handleOpenTopup}
+                  onRefresh={handleRefresh}
+                />
+                <NavDivider />
+                <SyncStatusMenu
+                  syncStatus={currentSyncStatus}
+                  syncStatusError={teamSyncStatusError}
+                  isSyncing={isSyncing}
+                  onCheckSync={handleSyncStatus}
+                />
+                <RescanButton
+                  rescanStatus={teamRescanStatus}
+                  rescanLoading={teamRescanLoading}
+                  rescanHidden={rescanHidden}
+                  onRescan={() => rescanTeamWallet(currentTeam.id)}
+                />
+                <NavDivider />
+              </TooltipProvider>
             )}
 
             {/* Role Toggle */}
